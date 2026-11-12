@@ -368,6 +368,9 @@ pub struct UiContribution {
     /// paging (see [`crate::ui::UiPageSource`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::ui::UiPageSource>,
+    /// scan-handler only: the approved route, read-only resolver and pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<UiScanHandler>,
     /// Sample data the marketplace renders this contribution with: an object
     /// of at most [`MAX_UI_PREVIEW_BYTES`]. Never read at run time; hosts
     /// leave it out of the client catalog.
@@ -452,6 +455,55 @@ pub enum UiContributionKind {
     /// contribution of the same plugin. `icon` and `order` place it; an
     /// optional `summary` names a `query` whose result gives a subtitle.
     AccountEntry,
+    /// An exact, approved scan route resolved by this plugin's query.
+    ScanHandler,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiScanHandler {
+    #[schemars(regex(pattern = "^[a-z][a-z0-9]{1,4}$"))]
+    pub route_key: String,
+    pub resolve: String,
+    #[schemars(length(min = 1, max = 8))]
+    pub pages: Vec<String>,
+    /// Empty means every source. This narrows presentation, never authorization.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<UiScanSource>,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum UiScanSource {
+    Camera,
+    Album,
+    Link,
+    Chat,
+    Paste,
+}
+
+impl UiScanHandler {
+    pub fn validate(&self) -> Result<()> {
+        ensure(
+            (2..=5).contains(&self.route_key.len())
+                && self.route_key.as_bytes()[0].is_ascii_lowercase()
+                && self
+                    .route_key
+                    .bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+            "clientExtensions.contributions.scan.routeKey",
+            "expected 2 to 5 lowercase ASCII letters or digits, starting with a letter",
+        )?;
+        ensure(
+            (1..=8).contains(&self.pages.len())
+                && self.pages.iter().collect::<BTreeSet<_>>().len() == self.pages.len()
+                && self.sources.iter().collect::<BTreeSet<_>>().len() == self.sources.len(),
+            "clientExtensions.contributions.scan",
+            "expected 1 to 8 unique pages and unique sources",
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -819,6 +871,16 @@ impl PluginManifest {
             crate::configuration::validate_client_visible_markers(configuration)?;
         }
         let mut contribution_ids = BTreeSet::new();
+        ensure(
+            self.client_extensions
+                .contributions
+                .iter()
+                .filter(|c| c.kind == UiContributionKind::ScanHandler)
+                .count()
+                <= 1,
+            "clientExtensions.contributions.scan",
+            "at most one scan-handler per plugin",
+        )?;
         for contribution in &self.client_extensions.contributions {
             identifier(&contribution.id, "clientExtensions.contributions.id")?;
             ensure(
@@ -1188,6 +1250,7 @@ impl PluginManifest {
                     contribution.availability.as_ref().map(|a| &a.operation),
                     contribution.entity_lifecycle.as_ref().map(|l| &l.unbound),
                     contribution.source.as_ref().map(|s| &s.operation),
+                    contribution.scan.as_ref().map(|s| &s.resolve),
                 ]
                 .into_iter()
                 .flatten()
@@ -1212,6 +1275,20 @@ impl PluginManifest {
             }
         }
         operations
+    }
+
+    /// Permanent registry claims, including approved scan routes. Keeping these
+    /// claims after an upgrade prevents another plugin taking over printed links.
+    pub fn claimed_namespaces(&self) -> BTreeSet<String> {
+        self.capabilities
+            .iter()
+            .map(|c| c.id.clone())
+            .chain(self.client_extensions.contributions.iter().filter_map(|c| {
+                c.scan
+                    .as_ref()
+                    .map(|scan| format!("scan-route.{}", scan.route_key))
+            }))
+            .collect()
     }
 
     /// Non-fatal findings about a manifest that [`Self::validate`] accepts:
@@ -1243,6 +1320,40 @@ impl PluginManifest {
     fn validate_contribution_surface(&self, contribution: &UiContribution) -> Result<()> {
         use crate::ui::UiActionTarget;
         let kind = contribution.kind;
+        ensure(
+            (kind == UiContributionKind::ScanHandler) == contribution.scan.is_some(),
+            "clientExtensions.contributions.scan",
+            "scan-handler requires scan; other kinds may not declare scan",
+        )?;
+        if let Some(scan) = &contribution.scan {
+            scan.validate()?;
+            ensure(
+                self.operation(&scan.resolve)
+                    .is_some_and(|op| op.mode == OperationMode::Query),
+                "clientExtensions.contributions.scan.resolve",
+                "must be a declared query operation",
+            )?;
+            ensure(
+                scan.pages.iter().all(|page| {
+                    self.client_extensions
+                        .contributions
+                        .iter()
+                        .any(|c| c.id == *page && c.kind == UiContributionKind::Page)
+                }),
+                "clientExtensions.contributions.scan.pages",
+                "must name page contributions of this plugin",
+            )?;
+            let document = &contribution.schema;
+            ensure(
+                document.fields.is_empty()
+                    && document.blocks.is_empty()
+                    && document.inputs.is_empty()
+                    && document.actions.is_empty()
+                    && document.presentation.is_none(),
+                "clientExtensions.contributions.scan.schema",
+                "scan-handler documents contain only provider title and translations",
+            )?;
+        }
         let message_content = kind == UiContributionKind::MessageContent;
         ensure(
             contribution
@@ -1353,6 +1464,22 @@ impl PluginManifest {
         if let Some(source) = &contribution.source {
             ensure(page, "clientExtensions.contributions.source", "page only")?;
             source.validate()?;
+            if source.refresh_ms.is_some() {
+                ensure(
+                    source.cursor_path.is_none()
+                        && contribution.schema.filter_inputs().is_empty()
+                        && contribution
+                            .schema
+                            .inputs
+                            .iter()
+                            .all(|input| input.kind != crate::ui::UiInputKind::Password)
+                        && contribution.schema.presentation.as_ref().is_none_or(|p| {
+                            p.renderer != "payment.confirm" && p.renderer != "redPacket.pay"
+                        }),
+                    "clientExtensions.contributions.source.refreshMs",
+                    "automatic refresh cannot coexist with paging, filters, passwords or payment confirmation",
+                )?;
+            }
             ensure(
                 source
                     .command_slot

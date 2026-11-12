@@ -266,6 +266,7 @@ fn catalog(manifest: &PluginManifest) -> UiCatalog {
         valid_until_ms: 10000,
         plugins: vec![ClientPlugin {
             query_operations: Default::default(),
+            transient_operations: Default::default(),
             operations: manifest.operation_ids(),
             plugin_id: manifest.plugin_id.clone(),
             version: manifest.version.clone(),

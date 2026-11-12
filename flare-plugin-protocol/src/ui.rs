@@ -432,8 +432,8 @@ pub struct UiAction {
     /// plugin still authorizes every invocation; hiding is never a permission.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
-    /// Ids of document inputs the host collects first (`0..=16`, operation
-    /// targets only); their validated values join the action input under their
+    /// Ids of document inputs the host collects first (`0..=16`, operation or
+    /// transient reauthenticate targets); their validated values join the action input under their
     /// ids, which must not repeat a declared input name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub form: Vec<String>,
@@ -737,6 +737,8 @@ pub enum NativeCapability {
     Camera,
     Microphone,
     ClipboardWrite,
+    /// Host-owned verification. Secrets remain in an ephemeral host flow.
+    Reauthenticate,
 }
 
 #[derive(
@@ -908,10 +910,17 @@ pub struct UiPageSource {
     /// query. Scoped to the signed-in tenant/user; never supplied by a server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_slot: Option<String>,
+    /// Visible, idle pages may refresh this often. No input is submitted by a tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 3000, max = 60000))]
+    pub refresh_ms: Option<u32>,
 }
 impl UiPageSource {
     pub fn validate(&self) -> Result<()> {
         if self.operation.is_empty()
+            || self
+                .refresh_ms
+                .is_some_and(|ms| !(3000..=60000).contains(&ms))
             || self.operation.len() > 128
             || !valid_bindings(&self.input)
             || self.input.contains_key(DETAIL_CURSOR_INPUT)
@@ -1075,7 +1084,13 @@ impl UiDocument {
                         || action.input.contains_key(id)
                 })
                 || (!action.form.is_empty()
-                    && !matches!(action.target, UiActionTarget::Operation { .. }))
+                    && !matches!(
+                        action.target,
+                        UiActionTarget::Operation { .. }
+                            | UiActionTarget::Native {
+                                capability: NativeCapability::Reauthenticate
+                            }
+                    ))
             {
                 return Err(ProtocolError::Denied("invalid UI action form"));
             }
@@ -1270,9 +1285,9 @@ impl UiDocument {
 }
 /// A plugin as clients read it in the [`UiCatalog`].
 ///
-/// New abilities use a new contribution kind; do not add fields to the top
-/// level of this type. A client drops only a contribution it cannot read, but
-/// the whole plugin over one top-level field it does not know.
+/// New presentation abilities use a new contribution kind. Optional authority
+/// metadata is emitted only for plugins declaring the corresponding new surface;
+/// older strict readers drop that plugin rather than infer missing authority.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientPlugin {
@@ -1286,6 +1301,10 @@ pub struct ClientPlugin {
     /// metadata from an older Core never grants command-observation authority.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub query_operations: BTreeSet<String>,
+    /// Approved commands whose signed input schema has no command identity.
+    /// Native host flows may invoke only this explicit, non-journal authority.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub transient_operations: BTreeSet<String>,
     /// The client-visible subset of the tenant configuration
     /// ([`crate::PluginManifest::client_visible_configuration`]).
     #[serde(default, skip_serializing_if = "Map::is_empty")]
@@ -1544,6 +1563,9 @@ pub struct ResolvedPluginView {
     /// page, absent on the last page (see [`UiDetail::page_input`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// A page source's approved refresh cadence; absent on inert views.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_ms: Option<u32>,
 }
 impl ResolvedPluginView {
     /// Append the next page of a paged detail, resolved against the same
@@ -1802,6 +1824,7 @@ pub(crate) fn resolve_document(
             .collect(),
         detail: detail.is_some(),
         next_cursor: None,
+        refresh_ms: None,
     }
 }
 impl UiContribution {
@@ -1840,12 +1863,20 @@ impl UiContribution {
         }
         let mut view = resolve_document(&self.schema, data, locale, viewer, None);
         view.next_cursor = self.source.as_ref().and_then(|s| s.next_cursor(data));
+        view.refresh_ms = self.source.as_ref().and_then(|s| s.refresh_ms);
         Some(view)
     }
     /// [`UiDocument::retain_targets`] over the document and the detail; the
     /// detail is dropped when `keep` rejects its operation.
     pub fn retain_targets(&mut self, mut keep: impl FnMut(&UiActionTarget) -> bool) {
         self.schema.retain_targets(&mut keep);
+        if self.scan.as_ref().is_some_and(|scan| {
+            !keep(&UiActionTarget::Operation {
+                operation: scan.resolve.clone(),
+            })
+        }) {
+            self.scan = None;
+        }
         if self.detail.as_ref().is_some_and(|detail| {
             !keep(&UiActionTarget::Operation {
                 operation: detail.operation.clone(),
@@ -1890,6 +1921,7 @@ impl ResolvedPluginView {
             inputs: vec![],
             detail: false,
             next_cursor: None,
+            refresh_ms: None,
         }
     }
 }

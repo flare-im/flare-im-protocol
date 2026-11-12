@@ -1309,6 +1309,7 @@ fn catalog(platforms: Value, unavailable: Value) -> UiCatalog {
         valid_until_ms: 10_000,
         plugins: vec![ClientPlugin {
             query_operations: Default::default(),
+            transient_operations: Default::default(),
             operations: manifest.operation_ids(),
             plugin_id: manifest.plugin_id,
             version: manifest.version,

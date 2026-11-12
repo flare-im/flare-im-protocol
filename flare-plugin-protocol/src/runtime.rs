@@ -438,7 +438,7 @@ impl PluginRuntimeSnapshot {
         )?;
         let mut ids = BTreeSet::new();
         let mut active = BTreeSet::new();
-        let mut namespaces: BTreeMap<&str, &str> = BTreeMap::new();
+        let mut namespaces: BTreeMap<String, String> = BTreeMap::new();
         for plugin in &self.plugins {
             let g = &plugin.grant;
             grant_in_lease(
@@ -448,16 +448,16 @@ impl PluginRuntimeSnapshot {
                 &mut ids,
                 &mut active,
             )?;
-            for capability in &plugin.manifest().capabilities {
+            for capability in plugin.manifest().claimed_namespaces() {
                 if namespaces.iter().any(|(namespace, owner)| {
                     *owner != g.plugin_id
-                        && (*namespace == capability.id
-                            || namespace.starts_with(&format!("{}.", capability.id))
-                            || capability.id.starts_with(&format!("{namespace}.")))
+                        && (*namespace == capability
+                            || namespace.starts_with(&format!("{capability}."))
+                            || capability.starts_with(&format!("{namespace}.")))
                 }) {
-                    return Err(ProtocolError::NamespaceConflict(capability.id.clone()));
+                    return Err(ProtocolError::NamespaceConflict(capability));
                 }
-                namespaces.insert(&capability.id, &g.plugin_id);
+                namespaces.insert(capability, g.plugin_id.clone());
             }
         }
         Ok(())

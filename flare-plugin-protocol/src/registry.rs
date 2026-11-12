@@ -44,21 +44,21 @@ impl PluginRegistry {
                 )))
             };
         }
-        for capability in &manifest.capabilities {
+        for capability in manifest.claimed_namespaces() {
             // Prefix overlap is ownership overlap: `im.tools` cannot be claimed
             // by another plugin when `im.tools.search` is already registered.
             if self.namespace_owners.iter().any(|(namespace, owner)| {
                 owner != &manifest.plugin_id
-                    && (namespace == &capability.id
-                        || namespace.starts_with(&format!("{}.", capability.id))
-                        || capability.id.starts_with(&format!("{namespace}.")))
+                    && (namespace == &capability
+                        || namespace.starts_with(&format!("{}.", capability))
+                        || capability.starts_with(&format!("{namespace}.")))
             }) {
-                return Err(ProtocolError::NamespaceConflict(capability.id.clone()));
+                return Err(ProtocolError::NamespaceConflict(capability.clone()));
             }
         }
         let id = manifest.plugin_id.clone();
-        for cap in &manifest.capabilities {
-            self.namespace_owners.insert(cap.id.clone(), id.clone());
+        for namespace in manifest.claimed_namespaces() {
+            self.namespace_owners.insert(namespace, id.clone());
         }
         self.versions
             .entry(id)

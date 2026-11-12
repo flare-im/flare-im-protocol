@@ -523,9 +523,9 @@
       "value, value ref, array value": "not JSON: EOF while parsing an object at line 1 column 25"
     },
     "unknown capability": {
-      "array str": "err Data: unknown variant `selectimage`, expected one of `selectImage`, `selectFile`, `camera`, `microphone`, `clipboardWrite` at line 1 column 46",
+      "array str": "err Data: unknown variant `selectimage`, expected one of `selectImage`, `selectFile`, `camera`, `microphone`, `clipboardWrite`, `reauthenticate` at line 1 column 46",
       "input": "{\"kind\":\"native\",\"capability\":\"selectimage\"}",
-      "str, slice, reader, value, value ref, array value": "err Data: unknown variant `selectimage`, expected one of `selectImage`, `selectFile`, `camera`, `microphone`, `clipboardWrite`"
+      "str, slice, reader, value, value ref, array value": "err Data: unknown variant `selectimage`, expected one of `selectImage`, `selectFile`, `camera`, `microphone`, `clipboardWrite`, `reauthenticate`"
     },
     "unknown field": {
       "array str": "err Data: unknown field `page`, expected `operation` at line 1 column 52",

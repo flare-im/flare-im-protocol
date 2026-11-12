@@ -16,6 +16,7 @@ pub mod resource;
 pub mod runtime;
 pub mod service;
 pub mod signature;
+pub mod staff_reauth;
 pub mod state;
 mod tagged;
 pub mod ui;

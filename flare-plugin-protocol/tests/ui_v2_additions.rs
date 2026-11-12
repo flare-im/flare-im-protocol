@@ -330,6 +330,7 @@ fn composer_catalog(configuration: Value) -> UiCatalog {
         valid_until_ms: 10000,
         plugins: vec![ClientPlugin {
             query_operations: Default::default(),
+            transient_operations: Default::default(),
             operations: manifest.operation_ids(),
             configuration: manifest
                 .client_visible_configuration(&configuration)
@@ -912,6 +913,7 @@ fn paged_detail_resolves_through_the_catalog_and_pages_admin_rows() {
         valid_until_ms: 10000,
         plugins: vec![ClientPlugin {
             query_operations: Default::default(),
+            transient_operations: Default::default(),
             operations: manifest.operation_ids(),
             plugin_id: manifest.plugin_id.clone(),
             version: manifest.version.clone(),
