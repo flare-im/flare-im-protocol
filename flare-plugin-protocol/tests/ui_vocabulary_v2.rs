@@ -221,7 +221,7 @@ fn a_chart_reads_one_or_more_series_of_bounded_points() {
 fn an_image_is_a_signed_asset_or_a_private_file() {
     let image = |source: Value| json!({"kind": "image", "source": source, "aspect": "4:3", "alt": "证件照"});
     assert!(valid(with_blocks(json!([image(
-        json!({"asset": "img/banner.png"})
+        json!({"asset": "assets/img/banner.png"})
     )]))));
     assert!(!valid(with_blocks(json!([image(
         json!({"asset": "../x.png"})
@@ -756,7 +756,7 @@ fn manifest_value() -> Value {
             "timeoutMs": 5000, "mode": mode, "ownerScoped": owner
         }));
     }
-    manifest["assets"] = json!([{"path": "img/banner.png",
+    manifest["assets"] = json!([{"path": "assets/img/banner.png",
         "digest": format!("sha256:{}", "a".repeat(64)), "size": 10}]);
     manifest
 }
@@ -839,11 +839,11 @@ fn image_assets_and_qr_refreshes_are_declared() {
     let none = &|_: &mut Value| {};
     let image = |asset: &str| json!([{"kind": "image", "source": {"asset": asset}, "aspect": "16:9", "alt": "配图"}]);
     assert!(publishes(
-        page_with(image("img/banner.png"), json!([]), json!([])),
+        page_with(image("assets/img/banner.png"), json!([]), json!([])),
         none
     ));
     assert!(!publishes(
-        page_with(image("img/other.png"), json!([]), json!([])),
+        page_with(image("assets/img/other.png"), json!([]), json!([])),
         none
     ));
     let qr = |operation: &str| json!([{"kind": "qr", "valuePath": "/code", "refreshOperation": operation}]);

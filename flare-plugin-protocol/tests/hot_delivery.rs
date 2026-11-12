@@ -859,8 +859,8 @@ fn an_upgrade_placeholder_resolves_as_upgrade_required() {
         .select(&client(&engine_vocabulary(), 1, false))
         .into_contribution();
     let catalog = catalog_with(&placeholder);
-    let context = context(UiContributionKind::Page);
-    let Err(reason) = catalog.page("example.poll", "example.poll.dashboard", &context) else {
+    let page_context = context(UiContributionKind::Page);
+    let Err(reason) = catalog.page("example.poll", "example.poll.dashboard", &page_context) else {
         panic!("a placeholder is no page");
     };
     assert_eq!(reason, UiUnavailableReason::UpgradeRequired);
