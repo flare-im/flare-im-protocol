@@ -791,8 +791,9 @@ pub enum NativeCapability {
     /// The host frames, compresses and strips an identity document photo,
     /// uploads it privately and writes `{fileId}` into a `document` input.
     DocumentCapture,
-    /// One position fix, confirmed by the viewer each time, at the declared
-    /// precision.
+    /// One position fix, confirmed by the viewer each time, truncated to the
+    /// declared precision and written into a `location` input of the same
+    /// precision ([`UiLocationValue`]).
     LocationOnce,
     /// A host-held audio/video session; signalling goes through plugin
     /// operations.
@@ -833,16 +834,17 @@ impl NativeCapability {
             Self::SelectImage | Self::Camera => &[UiInputKind::Image, UiInputKind::File],
             Self::SelectFile => &[UiInputKind::File],
             Self::DocumentCapture => &[UiInputKind::Document],
+            Self::LocationOnce => &[UiInputKind::Location],
             _ => &[],
         }
     }
     /// Whether a declared action may target the capability with `params` and
-    /// `into`: `documentCapture` takes its parameters and an `into`;
-    /// `locationOnce` and `rtcSession` take their parameters; the others
-    /// take none; `paymentConfirmation` is never a declared target.
+    /// `into`: `documentCapture` and `locationOnce` take their parameters and
+    /// an `into`; `rtcSession` takes its parameters; the others take none;
+    /// `paymentConfirmation` is never a declared target.
     pub fn accepts(self, params: Option<&NativeParams>, into: Option<&str>) -> bool {
         let into_ok = match into {
-            None => self != Self::DocumentCapture,
+            None => !self.needs_into(),
             Some(id) => !self.into_kinds().is_empty() && valid_name(id),
         };
         into_ok
@@ -854,6 +856,11 @@ impl NativeCapability {
                 (Self::DocumentCapture | Self::LocationOnce | Self::RtcSession, _) => false,
                 (_, params) => params.is_none(),
             }
+    }
+    /// Whether the capability only writes into an input, so a target of it
+    /// names one (`documentCapture`, `locationOnce`).
+    pub fn needs_into(self) -> bool {
+        matches!(self, Self::DocumentCapture | Self::LocationOnce)
     }
     /// Capabilities a tenant approves like a permission: they enter the
     /// permission difference of an upgrade request.
@@ -935,7 +942,8 @@ pub const PAYMENT_CONFIRMATION_KEY: &str = "confirmation";
 /// What a plugin command returns to have the host confirm a payment
 /// (`data.confirmation`). The host draws the confirmation itself from these
 /// fields only, verifies the viewer, and calls `operation` (a transient
-/// operation of the same plugin) with a Core-issued confirmation ticket and
+/// operation of the same plugin, listed in
+/// [`ClientPlugin::transient_operations`]) with the confirmation proof and
 /// `orderId`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1399,8 +1407,8 @@ impl UiDocument {
     }
     /// A native target fits its capability ([`NativeCapability::accepts`])
     /// and its `into` names an input of this document of a kind the
-    /// capability writes, of the same side for `documentCapture`. Any other
-    /// target passes.
+    /// capability writes, of the same side for `documentCapture` and the
+    /// same precision for `locationOnce`. Any other target passes.
     fn valid_native_target(&self, target: &UiActionTarget) -> bool {
         let UiActionTarget::Native {
             capability,
@@ -1417,6 +1425,9 @@ impl UiDocument {
                         && capability.into_kinds().contains(&input.kind)
                         && match params {
                             Some(NativeParams::DocumentCapture(p)) => input.side == Some(p.side),
+                            Some(NativeParams::LocationOnce(p)) => {
+                                input.precision == Some(p.precision)
+                            }
                             _ => true,
                         }
                 })
@@ -1612,6 +1623,12 @@ pub struct ClientPlugin {
     /// metadata from an older Core never grants command-observation authority.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub query_operations: BTreeSet<String>,
+    /// Authorized operations the signed manifest marks `transient`: reached
+    /// only through a host confirmation (a `paymentConfirmation` order's
+    /// `operation` must be one), never by a declared action or a bundle
+    /// command. Missing from an older Core: no order can be confirmed.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub transient_operations: BTreeSet<String>,
     /// The client-visible subset of the tenant configuration
     /// ([`crate::PluginManifest::client_visible_configuration`]).
     #[serde(default, skip_serializing_if = "Map::is_empty")]

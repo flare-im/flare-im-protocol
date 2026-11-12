@@ -711,11 +711,40 @@ fn native_targets_take_the_parameters_of_their_capability() {
         json!({"kind": "native", "capability": "clipboardWrite", "into": "photo"}),
         image
     ));
-    // Location and RTC take their own parameters.
-    let location =
-        |params: Value| json!({"kind": "native", "capability": "locationOnce", "params": params});
-    assert!(native(location(json!({"precision": "coarse"})), json!([])));
-    assert!(!native(location(json!({"precision": "street"})), json!([])));
+    // Location takes its parameters and writes into a location input of the
+    // same precision; RTC takes its own parameters.
+    let place = json!([{"id": "place", "kind": "location", "label": "p", "precision": "coarse"},
+                       {"id": "note", "kind": "text", "label": "n"}]);
+    let location = |params: Value, into: &str| json!({"kind": "native", "capability": "locationOnce", "params": params, "into": into});
+    assert!(native(
+        location(json!({"precision": "coarse"}), "place"),
+        place.clone()
+    ));
+    assert!(
+        !native(
+            location(json!({"precision": "fine"}), "place"),
+            place.clone()
+        ),
+        "precision"
+    );
+    assert!(
+        !native(
+            location(json!({"precision": "coarse"}), "note"),
+            place.clone()
+        ),
+        "a text input"
+    );
+    assert!(!native(
+        location(json!({"precision": "street"}), "place"),
+        place.clone()
+    ));
+    assert!(
+        !native(
+            json!({"kind": "native", "capability": "locationOnce", "params": {"precision": "coarse"}}),
+            place.clone()
+        ),
+        "a location needs into"
+    );
     assert!(!native(
         json!({"kind": "native", "capability": "locationOnce"}),
         json!([])
@@ -735,6 +764,79 @@ fn native_targets_take_the_parameters_of_their_capability() {
         serde_json::to_value(&plain).unwrap(),
         json!({"kind": "native", "capability": "camera"})
     );
+}
+
+#[test]
+fn a_location_input_takes_a_fix_of_its_precision() {
+    let document_of = |raw: Value| document(raw).unwrap();
+    let document = |precision: Option<&str>| {
+        let mut input = json!({"id": "place", "kind": "location", "label": "p"});
+        if let Some(precision) = precision {
+            input["precision"] = json!(precision);
+        }
+        json!({"title": "t", "inputs": [input],
+               "actions": [{"id": "go", "label": "go", "form": ["place"],
+                            "target": {"kind": "operation", "operation": "example.poll.go"}}]})
+    };
+    assert!(valid(document(Some("coarse"))));
+    assert!(
+        !valid(document(None)),
+        "a location input declares its precision"
+    );
+    let mut side = document(Some("fine"));
+    side["inputs"][0]["side"] = json!("front");
+    assert!(!valid(side), "precision only, no side");
+    let stray = json!({"title": "t", "inputs": [
+        {"id": "note", "kind": "text", "label": "n", "precision": "fine"}]});
+    assert!(!valid(stray), "precision on another kind");
+
+    let parsed = document_of(document(Some("coarse")));
+    let submit = |value: Value| {
+        parsed
+            .validate_form(&parsed.actions[0], &json!({"place": value}))
+            .is_ok()
+    };
+    assert!(submit(json!({"latitude": 31.23, "longitude": 121.47,
+                          "accuracyM": 1000.0, "precision": "coarse"})));
+    assert!(
+        !submit(json!({"latitude": 31.2304, "longitude": 121.47,
+                       "accuracyM": 1000.0, "precision": "coarse"})),
+        "finer than coarse"
+    );
+    assert!(
+        !submit(json!({"latitude": 31.23, "longitude": 121.47,
+                       "accuracyM": 15.0, "precision": "coarse"})),
+        "accuracy below the coarse floor"
+    );
+    assert!(
+        !submit(json!({"latitude": 31.23, "longitude": 121.47,
+                       "accuracyM": 1000.0, "precision": "fine"})),
+        "another precision"
+    );
+    assert!(!submit(json!({"latitude": 91.0, "longitude": 0.0,
+                           "accuracyM": 1000.0, "precision": "coarse"})));
+    assert!(!submit(json!("31.23,121.47")));
+
+    let fix = UiLocationValue::truncate(
+        31.230_416,
+        121.473_701,
+        Some(12.4),
+        UiLocationPrecision::Fine,
+    )
+    .unwrap();
+    assert_eq!(
+        (fix.latitude, fix.longitude, fix.accuracy_m),
+        (31.230_42, 121.473_7, 12.0)
+    );
+    assert!(fix.fits(UiLocationPrecision::Fine) && !fix.fits(UiLocationPrecision::Coarse));
+    let coarse =
+        UiLocationValue::truncate(31.230_416, 121.473_701, None, UiLocationPrecision::Coarse)
+            .unwrap();
+    assert_eq!(
+        (coarse.latitude, coarse.longitude, coarse.accuracy_m),
+        (31.23, 121.47, 1000.0)
+    );
+    assert!(UiLocationValue::truncate(f64::NAN, 0.0, None, UiLocationPrecision::Fine).is_none());
 }
 
 #[test]
@@ -1007,5 +1109,40 @@ fn a_maskable_hero_says_so() {
             .unwrap()
             .get("maskable")
             .is_none()
+    );
+}
+
+#[test]
+fn a_transient_operation_is_a_command_no_declared_action_reaches() {
+    let none = &|_: &mut Value| {};
+    let transient = |id: &'static str| {
+        move |m: &mut Value| {
+            let operations = m["capabilities"][0]["operations"].as_array_mut().unwrap();
+            let op = operations.iter_mut().find(|o| o["id"] == id).unwrap();
+            op["transient"] = json!(true);
+        }
+    };
+    let open = || {
+        page_with(
+            json!([]),
+            read_action("example.poll.open"),
+            material_input(),
+        )
+    };
+    assert!(publishes(open(), none));
+    assert!(
+        !publishes(open(), &transient("open")),
+        "only a host confirmation calls a transient operation"
+    );
+    assert!(publishes(
+        page_with(json!([]), json!([]), json!([])),
+        &transient("open")
+    ));
+    assert!(
+        !publishes(
+            page_with(json!([]), json!([]), json!([])),
+            &transient("code")
+        ),
+        "a query is never transient"
     );
 }

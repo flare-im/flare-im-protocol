@@ -149,6 +149,13 @@ pub struct PluginOperation {
     /// media.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner_scoped: bool,
+    /// `command` only: the operation runs only once the host confirmed it
+    /// with the viewer through a host capability (the `operation` of a
+    /// `paymentConfirmation` order). No declared action, bundle command or
+    /// background call reaches it; clients read the set as the catalog's
+    /// `transientOperations`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transient: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -788,6 +795,11 @@ impl PluginManifest {
                     "operations.ownerScoped",
                     "query operations only",
                 )?;
+                ensure(
+                    !op.transient || op.mode == OperationMode::Command,
+                    "operations.transient",
+                    "command operations only",
+                )?;
             }
         }
         ensure(
@@ -1288,7 +1300,10 @@ impl PluginManifest {
         for document in documents {
             for action in &document.actions {
                 let declared = match &action.target {
-                    UiActionTarget::Operation { operation } => self.operation(operation).is_some(),
+                    // A transient operation runs only behind a host confirmation.
+                    UiActionTarget::Operation { operation } => {
+                        self.operation(operation).is_some_and(|op| !op.transient)
+                    }
                     UiActionTarget::Page { page, plugin_id }
                         if plugin_id.as_ref().is_some_and(|p| p != &self.plugin_id) =>
                     {

@@ -3,7 +3,9 @@
 //! page (`admin.pages`) are the filters sent to its rows source. The host renders the form,
 //! the core SDK validates it with [`validate_form_values`], and the plugin
 //! re-validates the same rules on its side.
-use super::{UiReference, UiTranslation, translate, valid_name, valid_path, valid_text};
+use super::{
+    UiLocationPrecision, UiReference, UiTranslation, translate, valid_name, valid_path, valid_text,
+};
 use crate::{ProtocolError, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -67,6 +69,9 @@ pub enum UiInputKind {
     /// (`documentCapture`) and uploaded privately; value is exactly
     /// `{fileId}`. Its `side` says which.
     Document,
+    /// One position fix taken by the host (`locationOnce`) at the input's
+    /// `precision`; value is exactly [`UiLocationValue`].
+    Location,
 }
 impl UiInputKind {
     /// Every kind, in declaration order: the vocabulary source of
@@ -85,6 +90,7 @@ impl UiInputKind {
         Self::Money,
         Self::Image,
         Self::Document,
+        Self::Location,
     ];
     /// The wire name (`text`, `money`, ...).
     pub fn name(self) -> &'static str {
@@ -102,6 +108,7 @@ impl UiInputKind {
             Self::Money => "money",
             Self::Image => "image",
             Self::Document => "document",
+            Self::Location => "location",
         }
     }
     /// Kinds whose value is a private upload (`{fileId}`) and that declare
@@ -122,6 +129,74 @@ pub enum UiDocumentSide {
     Back,
     /// The holder with the document in hand.
     Holding,
+}
+
+/// The value of a `location` input: one fix the host truncated to the
+/// input's precision ([`UiLocationValue::fits`]). The plugin server checks
+/// it again; a client is never trusted with a position.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLocationValue {
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Metres, whole.
+    pub accuracy_m: f64,
+    pub precision: UiLocationPrecision,
+}
+impl UiLocationValue {
+    /// Decimal places of the degrees, and the smallest accuracy in metres, a
+    /// fix of `precision` keeps: two and 1 000 m (about a kilometre) for
+    /// coarse, five and 1 m for fine.
+    pub fn rules(precision: UiLocationPrecision) -> (i32, f64) {
+        match precision {
+            UiLocationPrecision::Coarse => (2, 1000.0),
+            UiLocationPrecision::Fine => (5, 1.0),
+        }
+    }
+    /// A fix truncated to `precision`: degrees rounded to its places,
+    /// accuracy raised to its floor and rounded to whole metres. `None` for
+    /// a fix outside the globe or with a broken accuracy.
+    pub fn truncate(
+        latitude: f64,
+        longitude: f64,
+        accuracy_m: Option<f64>,
+        precision: UiLocationPrecision,
+    ) -> Option<Self> {
+        let valid = latitude.is_finite()
+            && longitude.is_finite()
+            && (-90.0..=90.0).contains(&latitude)
+            && (-180.0..=180.0).contains(&longitude)
+            && accuracy_m.is_none_or(|a| a.is_finite() && a >= 0.0);
+        if !valid {
+            return None;
+        }
+        let (places, floor) = Self::rules(precision);
+        let scale = 10f64.powi(places);
+        let round = |degrees: f64| (degrees * scale).round() / scale;
+        Some(Self {
+            latitude: round(latitude),
+            longitude: round(longitude),
+            accuracy_m: accuracy_m.map_or(floor, |a| a.max(floor)).round(),
+            precision,
+        })
+    }
+    /// The value is a fix of exactly `precision`: on the globe, degrees with
+    /// no more places than it keeps, a whole accuracy not below its floor.
+    pub fn fits(&self, precision: UiLocationPrecision) -> bool {
+        let (places, floor) = Self::rules(precision);
+        let scale = 10f64.powi(places);
+        let truncated = |degrees: f64| ((degrees * scale).round() / scale - degrees).abs() < 1e-9;
+        self.precision == precision
+            && self.latitude.is_finite()
+            && self.longitude.is_finite()
+            && (-90.0..=90.0).contains(&self.latitude)
+            && (-180.0..=180.0).contains(&self.longitude)
+            && truncated(self.latitude)
+            && truncated(self.longitude)
+            && self.accuracy_m.is_finite()
+            && self.accuracy_m >= floor
+            && self.accuracy_m.fract() == 0.0
+    }
 }
 
 /// Largest fraction digits of a money input, and digits of its whole part.
@@ -501,6 +576,10 @@ pub struct UiInput {
     /// document only, and required there: which side it captures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub side: Option<UiDocumentSide>,
+    /// location only, and required there: the precision of the fix it
+    /// takes. A `locationOnce` writing into it declares the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precision: Option<UiLocationPrecision>,
     /// Hosts seed visible defaults once. Every controller value change clears
     /// all dependants, including uploads still visible under the new value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -594,6 +673,7 @@ impl UiInput {
             || (self.kind == Money) != self.money.is_some()
             || self.money.as_ref().is_some_and(|money| !money.is_valid())
             || (self.kind == Document) != self.side.is_some()
+            || (self.kind == Location) != self.precision.is_some()
             || self.show_when.as_ref().is_some_and(|when| {
                 !valid_name(&when.field)
                     || when.field == self.id
@@ -707,6 +787,7 @@ impl UiInput {
                 .money
                 .as_ref()
                 .is_some_and(|money| money.check(value).is_ok()),
+            (Location, Value::Object(_)) => self.location_fits(value),
             (Options, Value::Array(items)) => {
                 items.len() <= self.item_bounds().1 as usize
                     && items.iter().all(|item| {
@@ -716,6 +797,14 @@ impl UiInput {
             }
             _ => false,
         }
+    }
+
+    /// A `location` value of this input's precision.
+    fn location_fits(&self, value: &Value) -> bool {
+        self.precision.is_some_and(|precision| {
+            serde_json::from_value::<UiLocationValue>(value.clone())
+                .is_ok_and(|fix| fix.fits(precision))
+        })
     }
 
     /// A referenced value cannot be listed here: only its shape is checked.
@@ -856,6 +945,13 @@ impl UiInput {
                 Some(money) => money.check(value).map(|()| value.clone()),
                 None => Err(InvalidType),
             },
+            (Location, Value::Object(_)) => {
+                if self.location_fits(value) {
+                    Ok(value.clone())
+                } else {
+                    Err(InvalidType)
+                }
+            }
             (Options | Members, Value::Array(items)) => {
                 let (fewest, most) = self.item_bounds();
                 let mut seen = BTreeSet::new();
