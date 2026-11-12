@@ -749,7 +749,9 @@ pub struct UiChartBlock {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiImageSource {
     /// A file of the package's `assets/`, listed in the manifest's signed
-    /// `assets` table.
+    /// `assets` table. No client can read package files yet (the engine keeps
+    /// no copy of the package), so `flare-plugin check` refuses it; use
+    /// `filePath` until clients serve package assets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
     /// JSON pointer to a [`super::UiFileReference`] (`{fileId}`) in the
