@@ -1482,6 +1482,15 @@ pub(crate) fn valid_conditions(conditions: &[UiCondition]) -> bool {
 }
 
 impl UiBlock {
+    /// Whether a `hiddenWhen` condition matches `data` for `viewer`: the
+    /// block is not shown. Authoring tools use it to tell a block the data
+    /// hides from one the data does not feed.
+    pub fn is_hidden_by(&self, data: &Value, viewer: &str) -> bool {
+        self.hidden_when()
+            .iter()
+            .any(|condition| condition.matches(data, viewer))
+    }
+
     /// The block's display conditions: it is not shown when any of them
     /// matches the data the document is resolved against.
     pub fn hidden_when(&self) -> &[UiCondition] {
