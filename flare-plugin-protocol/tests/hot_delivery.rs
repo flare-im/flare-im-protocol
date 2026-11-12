@@ -893,3 +893,29 @@ fn an_upgrade_placeholder_resolves_as_upgrade_required() {
     assert_eq!(view.title, "[投票] 午饭");
     assert_eq!(view.min_build, Some(9));
 }
+
+#[test]
+fn a_card_bundle_variant_keeps_the_card_declarative() {
+    // A message card never runs a bundle inline: its bundle variant keeps the
+    // declarative document and the bundle is only what its detail opens.
+    let mut raw = card(json!([]), json!({}));
+    raw["variants"] = json!([
+        {"id": "board", "requires": {"bundle": {"id": "board", "bridge": 1}},
+         "bundle": {"id": "board", "route": "/detail"}},
+        {"id": "basic"}
+    ]);
+    let card = contribution(raw);
+    let chosen = card
+        .select(&client(&engine_vocabulary(), 1, true))
+        .into_contribution();
+    assert_eq!(chosen.variant.as_deref(), Some("board"));
+    assert_eq!(chosen.schema.title, "投票");
+    assert_eq!(chosen.schema.translations["en-US"].title, "Poll");
+    assert_eq!(chosen.bundle.as_ref().unwrap().route, "/detail");
+    let basic = card
+        .select(&client(&engine_vocabulary(), 1, false))
+        .into_contribution();
+    assert_eq!(basic.variant.as_deref(), Some("basic"));
+    assert_eq!(basic.schema, chosen.schema);
+    assert!(basic.bundle.is_none());
+}
