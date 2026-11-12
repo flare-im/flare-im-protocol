@@ -248,6 +248,12 @@ macro_rules! kind_tagged {
                     $($name::$variant { .. } => {})+
                 }
             }
+
+            impl $name {
+                /// Every tag this enum reads, in declaration order: the
+                /// vocabulary source of [`crate::ui::engine_vocabulary`].
+                pub const KINDS: &'static [&'static str] = &[$($kind),+];
+            }
         };
     };
 }

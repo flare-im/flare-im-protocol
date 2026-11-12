@@ -1856,8 +1856,10 @@ fn manifests_without_display_conditions_parse_and_serialize_as_before() {
     // inlined in UiBlock) and on the detail.
     let schema = serde_json::to_value(schemars::schema_for!(PluginManifest)).unwrap();
     let variants = schema["$defs"]["UiBlock"]["oneOf"].as_array().unwrap();
-    // Every card kind, plus the page-only `rows` and `protected-media`.
-    assert_eq!(variants.len(), CARD_KINDS.len() + 2);
+    // Every block kind: the card kinds, the page-only `rows` and
+    // `protected-media`, and the kinds added with client hot delivery.
+    assert_eq!(variants.len(), UiBlock::KINDS.len());
+    assert_eq!(UiBlock::KINDS.len(), CARD_KINDS.len() + 2 + 9);
     for variant in variants {
         assert!(
             variant["properties"]["hiddenWhen"].is_object(),
