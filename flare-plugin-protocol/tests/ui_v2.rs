@@ -900,6 +900,8 @@ fn inputs_declare_kind_specific_fields_only() {
         serde_json::from_value::<UiDocument>(
             json!({"title": "t", "inputs": [{"id": "a", "kind": "file", "label": "a"}]})
         )
+        .unwrap()
+        .validate()
         .is_err()
     );
     let duplicate = doc(json!({"title": "t", "inputs": [
