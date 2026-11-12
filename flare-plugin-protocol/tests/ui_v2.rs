@@ -591,7 +591,7 @@ fn entries_and_people_blocks() {
     );
     for bad in [
         json!({"kind": "entries", "itemsPath": "/l", "limit": 0}),
-        json!({"kind": "entries", "itemsPath": "/l", "limit": 51}),
+        json!({"kind": "entries", "itemsPath": "/l", "limit": 101}),
         json!({"kind": "people", "groups": []}),
         json!({"kind": "people", "groups": [{"label": "x"}]}),
         json!({"kind": "people", "max": 11, "groups": [{"label": "x", "countPath": "/c"}]}),

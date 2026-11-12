@@ -29,9 +29,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Options of a choices block.
 pub const MAX_UI_CHOICE_OPTIONS: usize = 50;
-/// Entries shown by an entries block (`limit` default and cap).
+/// Entries shown by an entries block (`limit` default and cap). The cap
+/// covers a whole list of a hundred, such as every claim of a red packet.
 pub const DEFAULT_UI_ENTRIES_LIMIT: u8 = 10;
-pub const MAX_UI_ENTRIES_LIMIT: u8 = 50;
+pub const MAX_UI_ENTRIES_LIMIT: u8 = 100;
 /// Groups of a people block, and avatars per group (`max` default and cap).
 pub const MAX_UI_PEOPLE_GROUPS: usize = 4;
 pub const DEFAULT_UI_PEOPLE_AVATARS: u8 = 5;
@@ -337,7 +338,7 @@ pub struct UiEntriesBlock {
     pub user_ids_path: Option<String>,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub numbered: bool,
-    /// `1..=50`, default 10.
+    /// `1..=100`, default 10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u8>,
     /// Total number of entries when the data holds only the latest ones.
