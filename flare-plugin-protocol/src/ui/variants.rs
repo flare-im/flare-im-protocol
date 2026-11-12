@@ -220,8 +220,8 @@ pub struct UiContributionVariant {
     /// the chosen one ([`UiContribution::variant`]).
     pub id: String,
     /// What the variant needs, beyond the [`base_vocabulary`]: at least what
-    /// its content uses ([`Self::missing_requires`] is empty), and possibly
-    /// more, such as a native capability its flow cannot do without.
+    /// its content uses ([`Self::missing_requires`] is empty), native
+    /// capabilities of its actions included, and possibly more.
     #[serde(default, skip_serializing_if = "UiRequires::is_empty")]
     pub requires: UiRequires,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -358,10 +358,10 @@ impl UiContribution {
     /// What this contribution's content uses, read from it: its kind, the
     /// kinds of every block (sections' included), input and field format of
     /// its document and detail document, its action target kinds, its
-    /// renderer, and its bundle (bridge 1). Native capabilities are not
-    /// derived: a client without one drops the action (Core does it in
-    /// [`Self::select`]), so a variant names them in `requires` only when it
-    /// cannot do without them. Its own `variants` are not looked at.
+    /// renderer, the native capabilities its actions target, and its bundle
+    /// (bridge 1). A client without one of those capabilities does not get
+    /// the presentation: [`Self::select`] tries the next one, an action is
+    /// never stripped. Its own `variants` are not looked at.
     pub fn derived_requires(&self) -> UiRequires {
         let mut requires = UiRequires::default();
         requires.kinds.insert(self.kind.name().to_owned());
@@ -389,6 +389,9 @@ impl UiContribution {
                 requires
                     .actions
                     .insert(target_kind(&action.target).to_owned());
+                if let UiActionTarget::Native { capability, .. } = &action.target {
+                    requires.native.insert(capability.name().to_owned());
+                }
             }
         }
         requires.bundle = self.bundle.as_ref().map(|bundle| UiRequiresBundle {
@@ -402,27 +405,20 @@ impl UiContribution {
     /// - an upgrade placeholder when `minClient` names a build above the
     ///   client's for its platform;
     /// - else the first presentation ([`Self::expansions`]) whose written
-    ///   and derived requirements the descriptor satisfies, with every native
-    ///   action the descriptor does not offer removed
-    ///   ([`Self::retain_targets`]);
+    ///   and derived requirements, native capabilities included, the
+    ///   descriptor satisfies, as it is (nothing stripped);
     /// - else an upgrade placeholder with the platform's `minClient`, if any.
     pub fn select(&self, descriptor: &ClientUiDescriptor) -> Selected {
         let floor = self.min_client.get(&descriptor.platform).copied();
         if floor.is_some_and(|floor| descriptor.app_build < floor) {
             return Selected::Upgrade(self.upgrade_placeholder(floor));
         }
-        for (index, (mut contribution, written)) in self.expansions().into_iter().enumerate() {
+        for (index, (contribution, written)) in self.expansions().into_iter().enumerate() {
             let mut needs = contribution.derived_requires();
             needs.union(&written);
             if !needs.satisfied_by(descriptor) {
                 continue;
             }
-            contribution.retain_targets(|target| match target {
-                UiActionTarget::Native { capability, .. } => {
-                    descriptor.native.contains(capability.name())
-                }
-                _ => true,
-            });
             return Selected::Variant {
                 contribution,
                 index,

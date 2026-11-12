@@ -311,40 +311,52 @@ fn a_variant_cannot_override_identity() {
 }
 
 #[test]
-fn a_client_without_a_native_capability_loses_only_that_action() {
+fn a_variant_needing_a_native_capability_the_client_lacks_is_skipped() {
+    let photo = json!({"title": "t", "actions": [
+        {"id": "photo", "label": "拍照", "target": {"kind": "native", "capability": "camera"}},
+        {"id": "vote", "label": "投票",
+         "target": {"kind": "operation", "operation": "example.poll.vote"}}],
+        "translations": {"en": {"title": "t", "actions": {"photo": "Photo", "vote": "Vote"}}}});
+    let plain = json!({"title": "t", "actions": [
+        {"id": "vote", "label": "投票",
+         "target": {"kind": "operation", "operation": "example.poll.vote"}}]});
     let card = contribution(json!({
         "kind": "message-content", "id": "example.poll.card", "schemaVersion": 1,
-        "requiredPermissions": [],
-        "schema": {"title": "t", "actions": [
-            {"id": "photo", "label": "拍照", "target": {"kind": "native", "capability": "camera"}},
-            {"id": "vote", "label": "投票",
-             "target": {"kind": "operation", "operation": "example.poll.vote"}}],
-            "translations": {"en": {"title": "t", "actions": {"photo": "Photo", "vote": "Vote"}}}}
+        "requiredPermissions": [], "schema": photo,
+        "variants": [{"id": "photo"}, {"id": "plain", "schema": plain}]
     }));
     let mut vocabulary = engine_vocabulary();
     vocabulary.native.clear();
-    let trimmed = card
-        .select(&client(&vocabulary, 1, false))
-        .into_contribution();
-    let ids: Vec<_> = trimmed
-        .schema
-        .actions
-        .iter()
-        .map(|a| a.id.as_str())
-        .collect();
-    assert_eq!(ids, ["vote"]);
-    assert!(
-        !trimmed.schema.translations["en"]
-            .actions
-            .contains_key("photo")
+    // Without the camera the photo variant is skipped, not stripped.
+    let selected = card.select(&client(&vocabulary, 1, false));
+    assert_eq!(selected.outcome(), "fallback");
+    let chosen = selected.into_contribution();
+    assert_eq!(chosen.variant.as_deref(), Some("plain"));
+    assert_eq!(chosen.schema.actions.len(), 1);
+    // With it, the first variant comes whole, its native action included.
+    vocabulary.native.insert("camera".into());
+    let kept = card.select(&client(&vocabulary, 1, false));
+    assert_eq!(kept.outcome(), "variant");
+    let kept = kept.into_contribution();
+    assert_eq!(kept.schema.actions.len(), 2);
+    assert!(kept.schema.translations["en"].actions.contains_key("photo"));
+    // A contribution whose only presentation needs it gets a placeholder.
+    let only = contribution(json!({
+        "kind": "message-content", "id": "example.poll.card", "schemaVersion": 1,
+        "requiredPermissions": [], "schema": photo
+    }));
+    vocabulary.native.clear();
+    assert_eq!(
+        only.select(&client(&vocabulary, 1, false)).outcome(),
+        "upgrade"
     );
     vocabulary.native.insert("camera".into());
-    let kept = card
+    let whole = only
         .select(&client(&vocabulary, 1, false))
         .into_contribution();
-    assert_eq!(kept.schema.actions.len(), 2);
     // Without variants the contribution itself is selected, unnamed.
-    assert_eq!(kept.variant, None);
+    assert_eq!(whole.variant, None);
+    assert_eq!(whole.schema.actions.len(), 2);
 }
 
 #[test]
@@ -392,7 +404,7 @@ fn derived_requires_name_every_kind_used() {
     assert_eq!(requires.actions, set(&["operation", "native"]));
     assert_eq!(requires.renderers, set(&["flare.qr"]));
     assert_eq!(requires.kinds, set(&["page"]));
-    assert!(requires.native.is_empty(), "native actions degrade instead");
+    assert_eq!(requires.native, set(&["camera"]));
     assert!(requires.bundle.is_none());
     // Beyond version 1, only the new names are left to write.
     let beyond = requires.beyond(&base_vocabulary());
@@ -404,6 +416,7 @@ fn derived_requires_name_every_kind_used() {
     assert_eq!(beyond.inputs, set(&["money"]));
     assert!(beyond.actions.is_empty() && beyond.kinds.is_empty());
     assert_eq!(beyond.renderers, set(&["flare.qr"]));
+    assert!(beyond.native.is_empty(), "camera is version 1");
 }
 
 // ---- publication ----
@@ -476,6 +489,34 @@ fn publication_refuses_a_variant_that_states_less_than_it_uses() {
     assert!(!rejected(&|page| {
         page["variants"][1]["requires"]["native"] = json!(["documentCapture"]);
     }));
+    // A native capability beyond version 1 that a variant's action uses
+    // must be stated.
+    let capture = |page: &mut Value| {
+        let schema = &mut page["variants"][1]["schema"];
+        schema["inputs"] = json!([{"id": "front", "kind": "document", "label": "人像面",
+            "side": "front", "file": {"accept": ["image/jpeg"], "maxBytes": 1024, "upload": {
+                "prepareOperation": "example.poll.dash", "completeOperation": "example.poll.mine",
+                "purpose": "kyc"}}}]);
+        schema["actions"] = json!([{"id": "scan", "label": "拍证件", "target": {
+            "kind": "native", "capability": "documentCapture",
+            "params": {"side": "front"}, "into": "front"}}]);
+        page["variants"][1]["requires"]["inputs"] = json!(["document"]);
+    };
+    let derived = {
+        let mut manifest = manifest_value();
+        capture(dashboard_raw(&mut manifest));
+        let page: UiContribution =
+            serde_json::from_value(dashboard_raw(&mut manifest).clone()).unwrap();
+        page.variants[1].missing_requires(&page)
+    };
+    assert_eq!(derived.native, set(&["documentCapture"]));
+    assert!(derived.blocks.is_empty() && derived.inputs.is_empty());
+    let mut stated = manifest_value();
+    capture(dashboard_raw(&mut stated));
+    dashboard_raw(&mut stated)["variants"][1]["requires"]["native"] = json!(["documentCapture"]);
+    let stated =
+        serde_json::from_value::<UiContribution>(dashboard_raw(&mut stated).clone()).unwrap();
+    assert!(stated.variants[1].missing_requires(&stated).is_empty());
     // Version 1 names need not be written: the basic variant states nothing.
     assert!(!rejected(&|_| {}));
     // A bundle variant must state its bundle.
