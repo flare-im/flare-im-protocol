@@ -1920,12 +1920,15 @@ fn as_count(value: &Value) -> Option<u64> {
         _ => None,
     }
 }
+/// An instant in plugin data, within [`super::MAX_UI_INSTANT_MS`]; anything
+/// else reads as absent.
 fn as_instant(value: &Value) -> Option<i64> {
     match value {
         Value::Number(n) => n.as_i64(),
         Value::String(s) if !s.is_empty() && s.len() <= 20 => s.parse().ok(),
         _ => None,
     }
+    .and_then(super::ui_instant)
 }
 fn truthy(value: &Value) -> bool {
     match value {

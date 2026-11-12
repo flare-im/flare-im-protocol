@@ -131,11 +131,14 @@ pub const MAX_UI_MONEY_WHOLE_DIGITS: usize = 30;
 pub const DEFAULT_UI_MONEY_INPUT_SCALE: u8 = 2;
 
 /// The amount rules of a `money` input. Exactly one of `currency` and
-/// `currencyPath`; the bounds are decimal strings, declared (`min`, `max`)
-/// or read from the data the document is resolved against (`minPath`,
-/// `maxPath`, such as a wallet balance), the read one taking the place of
-/// the declared one when it holds a valid amount. A resolved input carries
-/// the currency and bounds it read, and no paths.
+/// `currencyPath`; the fraction digits are `scale`, or read from the data
+/// (`scalePath`, the exponent of the asset being paid, `0..=18`); the bounds
+/// are decimal strings, declared (`min`, `max`) or read from the data the
+/// document is resolved against (`minPath`, `maxPath`, such as a wallet
+/// balance), the read one taking the place of the declared one when it
+/// holds a valid amount. A resolved input carries the currency, scale and
+/// bounds it read, and no paths; one whose `currencyPath` read nothing has
+/// no currency and accepts no value.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiMoneyInput {
@@ -147,6 +150,10 @@ pub struct UiMoneyInput {
     /// Fraction digits the amount may have (`0..=18`, default 2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<u8>,
+    /// Where the data holds the fraction digits (a number or digit string,
+    /// `0..=18`); it takes the place of `scale` when it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,12 +213,54 @@ pub fn cmp_ui_decimal(a: &str, b: &str) -> std::cmp::Ordering {
         })
 }
 
+/// `amount` without trailing fraction zeros (`12.50` → `12.5`, `3.00` → `3`).
+fn trim_ui_decimal(amount: &str) -> &str {
+    if amount.contains('.') {
+        amount.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        amount
+    }
+}
+
+/// `amount` cut to `scale` fraction digits (rounded down), when it is a
+/// decimal with any number of fraction digits.
+fn floor_ui_decimal(amount: &str, scale: u8) -> Option<String> {
+    let trimmed = trim_ui_decimal(amount);
+    if !is_ui_decimal(
+        trimmed,
+        MAX_UI_MONEY_INPUT_SCALE.max(u8::try_from(trimmed.len()).ok()?),
+    ) {
+        return None;
+    }
+    let cut = match trimmed.split_once('.') {
+        Some((whole, fraction)) if fraction.len() > usize::from(scale) => {
+            let kept = &fraction[..usize::from(scale)];
+            if kept.is_empty() {
+                whole.to_owned()
+            } else {
+                format!("{whole}.{kept}")
+            }
+        }
+        _ => trimmed.to_owned(),
+    };
+    Some(trim_ui_decimal(&cut).to_owned())
+}
+
 impl UiMoneyInput {
     pub fn effective_scale(&self) -> u8 {
         self.scale.unwrap_or(DEFAULT_UI_MONEY_INPUT_SCALE)
     }
+    /// The fraction digits a value is checked with: an input still reading
+    /// its scale from data (not resolved) admits any up to the largest.
+    fn check_scale(&self) -> u8 {
+        if self.scale_path.is_some() {
+            MAX_UI_MONEY_INPUT_SCALE
+        } else {
+            self.effective_scale()
+        }
+    }
     fn is_valid(&self) -> bool {
-        let scale = self.effective_scale();
+        let scale = self.check_scale();
         let bound = |b: &Option<String>| b.as_deref().is_none_or(|b| is_ui_decimal(b, scale));
         let path = |p: &Option<String>| p.as_deref().is_none_or(valid_path);
         (self.currency.is_some() != self.currency_path.is_some())
@@ -220,6 +269,7 @@ impl UiMoneyInput {
             && bound(&self.min)
             && bound(&self.max)
             && path(&self.currency_path)
+            && path(&self.scale_path)
             && path(&self.min_path)
             && path(&self.max_path)
             && match (&self.min, &self.max) {
@@ -227,10 +277,13 @@ impl UiMoneyInput {
                 _ => true,
             }
     }
-    /// The rules as resolved over `data`: currency and bounds read where
-    /// the paths point, when they hold valid values; no paths left.
+    /// The rules as resolved over `data`: currency, scale and bounds read
+    /// where the paths point, when they hold valid values; no paths left.
+    /// Bounds hold the resolved scale: trailing zeros go, and a maximum
+    /// with more fraction digits is rounded down to it (a minimum that does
+    /// not fit is not taken). A `currencyPath` that reads no valid code
+    /// leaves the input without a currency, which accepts no value.
     fn resolve(&self, data: &Value) -> Self {
-        let scale = self.effective_scale();
         let read = |path: &Option<String>| {
             path.as_deref()
                 .and_then(|p| data.pointer(p))
@@ -241,15 +294,27 @@ impl UiMoneyInput {
                 })
         };
         let mut resolved = self.clone();
-        if let Some(currency) = read(&self.currency_path).filter(|c| valid_currency(c)) {
-            resolved.currency = Some(currency);
+        if self.currency_path.is_some() {
+            resolved.currency = read(&self.currency_path).filter(|c| valid_currency(c));
         }
-        if let Some(min) = read(&self.min_path).filter(|v| is_ui_decimal(v, scale)) {
-            resolved.min = Some(min);
+        if let Some(scale) = read(&self.scale_path)
+            .and_then(|v| v.parse::<u8>().ok())
+            .filter(|s| *s <= MAX_UI_MONEY_INPUT_SCALE)
+        {
+            resolved.scale = Some(scale);
         }
-        if let Some(max) = read(&self.max_path).filter(|v| is_ui_decimal(v, scale)) {
-            resolved.max = Some(max);
-        }
+        resolved.scale_path = None;
+        let scale = resolved.effective_scale();
+        // Declared bounds hold the declared scale; one that does not fit the
+        // resolved scale is handled like a read one.
+        let fit_min =
+            |v: &str| Some(trim_ui_decimal(v).to_owned()).filter(|v| is_ui_decimal(v, scale));
+        resolved.min = read(&self.min_path)
+            .and_then(|v| fit_min(&v))
+            .or_else(|| self.min.as_deref().and_then(fit_min));
+        resolved.max = read(&self.max_path)
+            .and_then(|v| floor_ui_decimal(&v, scale))
+            .or_else(|| self.max.as_deref().and_then(|v| floor_ui_decimal(v, scale)));
         resolved.currency_path = None;
         resolved.min_path = None;
         resolved.max_path = None;
@@ -259,16 +324,16 @@ impl UiMoneyInput {
     fn check(&self, value: &Value) -> std::result::Result<(), UiFormIssue> {
         let money: UiMoneyValue =
             serde_json::from_value(value.clone()).map_err(|_| UiFormIssue::InvalidType)?;
-        if !is_ui_decimal(&money.amount, self.effective_scale()) || !valid_currency(&money.currency)
-        {
+        if !is_ui_decimal(&money.amount, self.check_scale()) || !valid_currency(&money.currency) {
             return Err(UiFormIssue::InvalidType);
         }
-        if self
-            .currency
-            .as_deref()
-            .is_some_and(|currency| currency != money.currency)
-        {
-            return Err(UiFormIssue::NotAChoice);
+        match (&self.currency, &self.currency_path) {
+            (Some(currency), _) if *currency != money.currency => {
+                return Err(UiFormIssue::NotAChoice);
+            }
+            // Resolved without a currency: its path read nothing.
+            (None, None) => return Err(UiFormIssue::NotAChoice),
+            _ => {}
         }
         if self
             .min

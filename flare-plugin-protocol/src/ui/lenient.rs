@@ -110,6 +110,12 @@ fn prepare_document(document: &mut Value, vocabulary: &UiVocabulary) -> Option<(
     let mut dropped = BTreeSet::new();
     if let Some(Value::Array(blocks)) = document.get_mut("blocks") {
         prepare_blocks(blocks, vocabulary, &mut dropped)?;
+        // An action a kept block owns too stays.
+        let mut kept = BTreeSet::new();
+        for block in blocks.iter() {
+            owned_actions(block, &mut kept);
+        }
+        dropped.retain(|id| !kept.contains(id));
     }
     if let Some(Value::Array(inputs)) = document.get("inputs") {
         for input in inputs {
@@ -240,7 +246,7 @@ fn degrade_format(object: &mut Value, key: &str, vocabulary: &UiVocabulary) {
 }
 
 /// Whether this client can run an action with `target`.
-fn target_known(target: &UiActionTarget, vocabulary: &UiVocabulary) -> bool {
+pub(crate) fn target_known(target: &UiActionTarget, vocabulary: &UiVocabulary) -> bool {
     match target {
         UiActionTarget::Operation { .. } => vocabulary.actions.contains("operation"),
         UiActionTarget::Page { .. } => vocabulary.actions.contains("page"),
@@ -306,10 +312,13 @@ fn placeholder(raw: &Map<String, Value>, kind: UiContributionKind) -> Option<UiC
                 .collect()
         })
         .unwrap_or_default();
-    let min_build = raw
-        .get("upgrade")
+    let upgrade = raw.get("upgrade");
+    let unsupported =
+        upgrade.and_then(|upgrade| upgrade.get("unsupported")) == Some(&Value::Bool(true));
+    let min_build = upgrade
         .and_then(|upgrade| upgrade.get("minBuild"))
-        .and_then(Value::as_u64);
+        .and_then(Value::as_u64)
+        .filter(|_| !unsupported);
     Some(UiContribution {
         kind,
         id,
@@ -347,7 +356,10 @@ fn placeholder(raw: &Map<String, Value>, kind: UiContributionKind) -> Option<UiC
         variants: Vec::new(),
         min_client: BTreeMap::new(),
         variant: None,
-        upgrade: Some(UiUpgrade { min_build }),
+        upgrade: Some(UiUpgrade {
+            min_build,
+            unsupported,
+        }),
         bundle: None,
     })
 }

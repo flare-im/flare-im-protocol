@@ -219,6 +219,19 @@ pub struct ResolvedUiReference {
     /// console does not show.
     pub labelled: bool,
 }
+/// The widest instant a resolved view carries, in ms either side of the
+/// epoch: the ECMAScript `Date` range, which every design kit can draw. Plugin
+/// data outside it (a "never expires" year 99999, a corrupted value) resolves
+/// as if absent, so no kit has to defend against an instant it cannot show.
+pub const MAX_UI_INSTANT_MS: i64 = 8_640_000_000_000_000;
+
+/// `ms` when it is within [`MAX_UI_INSTANT_MS`] of the epoch.
+pub fn ui_instant(ms: i64) -> Option<i64> {
+    (-MAX_UI_INSTANT_MS..=MAX_UI_INSTANT_MS)
+        .contains(&ms)
+        .then_some(ms)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedUiInstant {
@@ -372,6 +385,7 @@ impl UiFieldFormat {
                 None,
                 raw.parse()
                     .ok()
+                    .and_then(ui_instant)
                     .map(|at_ms| ResolvedUiFormat::Time(ResolvedUiInstant { at_ms })),
             ),
             Self::Percent(f) => {

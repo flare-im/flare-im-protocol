@@ -196,7 +196,7 @@ fn dashboard(min_client: Option<Value>) -> UiContribution {
              "source": {"operation": "example.poll.dash"}},
             {"id": "basic",
              "schema": {"title": "看板", "blocks": [
-                {"kind": "rows", "source": "example.poll.mine", "path": "/items",
+                {"kind": "rows", "required": true, "source": "example.poll.mine", "path": "/items",
                  "keyPath": "/id", "columns": [{"label": "任务", "path": "/title"}]}]},
              "source": {"operation": "example.poll.mine"}}
         ]
@@ -253,7 +253,7 @@ fn nothing_fits_or_min_client_gives_an_upgrade_placeholder() {
     let Selected::Upgrade(placeholder) = dashboard(None).select(&old) else {
         panic!("expected an upgrade placeholder");
     };
-    assert_eq!(placeholder.upgrade, Some(UiUpgrade { min_build: None }));
+    assert_eq!(placeholder.upgrade, Some(UiUpgrade::default()));
     // minClient blocks older builds whatever they can render.
     let floored = dashboard(Some(json!({"android": 41020, "ios": 50000})));
     let engine = engine_vocabulary();
@@ -346,9 +346,17 @@ fn a_variant_needing_a_native_capability_the_client_lacks_is_skipped() {
         "requiredPermissions": [], "schema": photo
     }));
     vocabulary.native.clear();
+    // The camera is a version 1 capability: this host withholds it, and no
+    // newer build changes that, so the placeholder offers no update.
+    let Selected::Unsupported(placeholder) = only.select(&client(&vocabulary, 1, false)) else {
+        panic!("expected an unsupported placeholder");
+    };
     assert_eq!(
-        only.select(&client(&vocabulary, 1, false)).outcome(),
-        "upgrade"
+        placeholder.upgrade,
+        Some(UiUpgrade {
+            min_build: None,
+            unsupported: true
+        })
     );
     vocabulary.native.insert("camera".into());
     let whole = only
@@ -369,15 +377,16 @@ fn derived_requires_name_every_kind_used() {
             "fields": [{"label": "比例", "path": "/p", "format": {"kind": "percent"}}],
             "blocks": [
                 {"kind": "section", "blocks": [
-                    {"kind": "chart", "chartKind": "line", "seriesPath": "/s", "labelPath": "/l",
-                     "valuePath": "/v", "format": {"kind": "count"}},
-                    {"kind": "fields", "fields": [{"label": "大小", "path": "/b",
+                    {"kind": "chart", "required": true, "chartKind": "line", "seriesPath": "/s",
+                     "labelPath": "/l", "valuePath": "/v", "format": {"kind": "count"}},
+                    {"kind": "fields", "required": true, "fields": [{"label": "大小", "path": "/b",
                                                    "format": {"kind": "bytes"}}]}]},
-                {"kind": "stats", "items": [
+                {"kind": "stats", "required": true, "items": [
                     {"label": "a", "valuePath": "/a", "format": {"kind": "duration"}},
                     {"label": "b", "valuePath": "/b"}]},
-                {"kind": "hero", "amountPath": "/x", "format": {"kind": "money", "scale": 2}},
-                {"kind": "rows", "source": "example.poll.list", "path": "/r", "keyPath": "/k",
+                {"kind": "hero", "required": true, "amountPath": "/x",
+                 "format": {"kind": "money", "scale": 2}},
+                {"kind": "rows", "required": true, "source": "example.poll.list", "path": "/r", "keyPath": "/k",
                  "columns": [{"label": "c", "path": "/c", "valueFormat": {"kind": "time"}}]}
             ],
             "inputs": [
@@ -417,6 +426,219 @@ fn derived_requires_name_every_kind_used() {
     assert!(beyond.actions.is_empty() && beyond.kinds.is_empty());
     assert_eq!(beyond.renderers, set(&["flare.qr"]));
     assert!(beyond.native.is_empty(), "camera is version 1");
+    // Everything used, required or not, is what a variant states.
+    assert_eq!(page.used_requires(), requires);
+}
+
+/// A card of optional blocks (stats, a hero owning the camera action
+/// `top-up`, a section holding a banner) and a text, with a `close` button.
+fn optional_blocks_card() -> Value {
+    card(
+        json!([
+            {"kind": "stats", "items": [
+                {"label": "a", "valuePath": "/a", "format": {"kind": "duration"}},
+                {"label": "b", "valuePath": "/b"}]},
+            {"kind": "hero", "amountPath": "/x", "actions": ["top-up"]},
+            {"kind": "section", "blocks": [{"kind": "banner", "tone": "info", "text": "x"}]},
+            {"kind": "text", "text": "x"}
+        ]),
+        json!({"actions": [
+            {"id": "top-up", "label": "充值", "target": {"kind": "native", "capability": "camera"}},
+            {"id": "close", "label": "结束", "target": {"kind": "operation", "operation": "example.poll.close"}}
+        ]}),
+    )
+}
+
+#[test]
+fn optional_blocks_are_not_requirements_and_core_strips_them() {
+    let raw = optional_blocks_card();
+    let card = contribution(raw.clone());
+    let requires = card.derived_requires();
+    assert!(
+        requires.blocks.is_empty(),
+        "no block is required: {:?}",
+        requires.blocks
+    );
+    assert!(
+        requires.formats.is_empty(),
+        "an optional block's formats are not needed"
+    );
+    assert!(
+        requires.native.is_empty(),
+        "an action only an optional block owns is not needed"
+    );
+    assert_eq!(requires.actions, set(&["operation"]));
+    // A vocabulary 1 client without the camera: the card, without what it cannot show.
+    let mut old = base_vocabulary();
+    old.native.clear();
+    let selected = card.select(&client(&old, 1, false));
+    assert_eq!(selected.outcome(), "variant");
+    let chosen = selected.into_contribution();
+    assert_eq!(block_kinds(&chosen), ["text"]);
+    let ids: Vec<_> = chosen
+        .schema
+        .actions
+        .iter()
+        .map(|a| a.id.as_str())
+        .collect();
+    assert_eq!(ids, ["close"]);
+    chosen.schema.validate().unwrap();
+    // The same as the client's own tolerant reading.
+    let read = ready(lenient::prepare_contribution(&raw, &old));
+    assert_eq!(read.schema, chosen.schema);
+    // A client that knows the blocks but not the duration format keeps them, plain.
+    let mut plain = engine_vocabulary();
+    plain.formats.remove("duration");
+    let kept = card.select(&client(&plain, 1, false)).into_contribution();
+    assert_eq!(block_kinds(&kept), ["stats", "hero", "section", "text"]);
+    let UiBlock::Stats(stats) = &kept.schema.blocks[0] else {
+        panic!("stats first");
+    };
+    assert!(stats.items[0].format.is_none());
+    assert_eq!(
+        kept.schema.actions.len(),
+        2,
+        "the hero keeps its camera action"
+    );
+    // A required one is a requirement again.
+    let mut required = raw.clone();
+    required["schema"]["blocks"][1]["required"] = json!(true);
+    let required = contribution(required);
+    assert!(required.derived_requires().blocks.contains("hero"));
+    assert!(required.derived_requires().native.contains("camera"));
+    assert_eq!(
+        required
+            .select(&client(&base_vocabulary(), 1, false))
+            .outcome(),
+        "upgrade"
+    );
+}
+
+#[test]
+fn a_shared_action_stays_while_a_kept_block_owns_it() {
+    let raw = card(
+        json!([
+            {"kind": "hero", "amountPath": "/x", "actions": ["pay"]},
+            {"kind": "rows", "source": "example.poll.list", "path": "/r", "keyPath": "/k",
+             "columns": [{"label": "c", "path": "/c"}], "actions": ["pay"]}
+        ]),
+        json!({"actions": [
+            {"id": "pay", "label": "付款", "target": {"kind": "operation", "operation": "example.poll.pay"}}
+        ]}),
+    );
+    let old = base_vocabulary();
+    let read = ready(lenient::prepare_contribution(&raw, &old));
+    assert_eq!(block_kinds(&read), ["rows"]);
+    assert_eq!(
+        read.schema.actions.len(),
+        1,
+        "the rows block still owns pay"
+    );
+    let chosen = contribution(raw)
+        .select(&client(&old, 1, false))
+        .into_contribution();
+    assert_eq!(chosen.schema, read.schema);
+}
+
+#[test]
+fn only_a_withheld_native_capability_gives_an_unsupported_placeholder() {
+    let copy = json!({"title": "AI", "actions": [
+        {"id": "copy", "label": "复制", "target": {"kind": "native", "capability": "clipboardWrite"}}]});
+    let card = contribution(json!({
+        "kind": "message-content", "id": "example.poll.ai", "schemaVersion": 1,
+        "requiredPermissions": [], "schema": copy.clone(), "minClient": {"android": 3}
+    }));
+    let mut web = engine_vocabulary();
+    web.native.remove("clipboardWrite");
+    // Below the floor the build is what stands in the way.
+    assert_eq!(card.select(&client(&web, 2, false)).outcome(), "upgrade");
+    let Selected::Unsupported(placeholder) = card.select(&client(&web, 3, false)) else {
+        panic!("expected an unsupported placeholder");
+    };
+    let upgrade = placeholder.upgrade.clone().unwrap();
+    assert!(upgrade.unsupported && upgrade.min_build.is_none());
+    assert_eq!(upgrade.reason(), UiUnavailableReason::UnsupportedPlatform);
+    assert!(placeholder.schema.actions.is_empty());
+    // It reads back, also through the tolerant path.
+    let raw = serde_json::to_value(&placeholder).unwrap();
+    assert_eq!(raw["upgrade"], json!({"unsupported": true}));
+    let Prepared::Upgrade(read) = lenient::prepare_contribution(&raw, &web) else {
+        panic!("a placeholder reads as one");
+    };
+    assert!(read.upgrade.unwrap().unsupported);
+    // A variant without the capability is the fallback.
+    let mut with_fallback = card.clone();
+    with_fallback.variants = serde_json::from_value(json!([
+        {"id": "copy"}, {"id": "plain", "schema": {"title": "AI"}}
+    ]))
+    .unwrap();
+    assert_eq!(
+        with_fallback.select(&client(&web, 3, false)).outcome(),
+        "fallback"
+    );
+    // When another presentation needs only a newer build, updating helps.
+    let mut newer = card.clone();
+    newer.variants = serde_json::from_value(json!([
+        {"id": "copy"},
+        {"id": "chart", "requires": {"blocks": ["chart"]}, "schema": {"title": "AI", "blocks": [
+            {"kind": "chart", "required": true, "chartKind": "bar", "seriesPath": "/s",
+             "labelPath": "/l", "valuePath": "/v"}]}}
+    ]))
+    .unwrap();
+    let old = without_blocks(web.clone(), &["chart"]);
+    assert_eq!(newer.select(&client(&old, 3, false)).outcome(), "upgrade");
+
+    // Cards and pages of an unsupported placeholder resolve as unsupported_platform.
+    let catalog = catalog_with(&placeholder);
+    let message: PluginMessage = serde_json::from_value(json!({
+        "pluginId": "example.poll", "contributionId": "example.poll.ai",
+        "schemaVersion": 1, "summary": "[AI] 回答", "payload": {}
+    }))
+    .unwrap();
+    let view = catalog.resolve_with_context(&message, context(UiContributionKind::MessageContent));
+    assert_eq!(
+        view.unavailable_reason,
+        Some(UiUnavailableReason::UnsupportedPlatform)
+    );
+    assert_eq!(view.min_build, None);
+    let mut page = placeholder.clone();
+    page.kind = UiContributionKind::Page;
+    let catalog = catalog_with(&page);
+    let Err(reason) = catalog.page(
+        "example.poll",
+        "example.poll.ai",
+        &context(UiContributionKind::Page),
+    ) else {
+        panic!("a placeholder is no page");
+    };
+    assert_eq!(reason, UiUnavailableReason::UnsupportedPlatform);
+}
+
+#[test]
+fn instants_outside_the_date_range_resolve_as_absent() {
+    assert_eq!(ui_instant(MAX_UI_INSTANT_MS), Some(MAX_UI_INSTANT_MS));
+    assert_eq!(ui_instant(-MAX_UI_INSTANT_MS), Some(-MAX_UI_INSTANT_MS));
+    assert_eq!(ui_instant(MAX_UI_INSTANT_MS + 1), None);
+    assert_eq!(ui_instant(i64::MIN), None);
+    let card = contribution(card(
+        json!([{"kind": "time", "path": "/at"}, {"kind": "text", "text": "x"}]),
+        json!({}),
+    ));
+    let kinds = |at: Value| -> Vec<Value> {
+        let view = card.resolve(&json!({"at": at}), "en-US", "u1");
+        serde_json::to_value(view).unwrap()["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["kind"].clone())
+            .collect()
+    };
+    assert_eq!(
+        kinds(json!(253_402_300_800_000_i64)),
+        [json!("time"), json!("text")]
+    );
+    assert_eq!(kinds(json!(9_000_000_000_000_000_i64)), [json!("text")]);
+    assert_eq!(kinds(json!("-9000000000000000")), [json!("text")]);
 }
 
 // ---- publication ----
@@ -642,7 +864,7 @@ fn a_required_block_the_client_cannot_read_needs_an_upgrade() {
     assert_eq!(placeholder.schema.title, "投票");
     assert_eq!(placeholder.schema.translations["en-US"].title, "Poll");
     assert!(placeholder.schema.blocks.is_empty());
-    assert_eq!(placeholder.upgrade, Some(UiUpgrade { min_build: None }));
+    assert_eq!(placeholder.upgrade, Some(UiUpgrade::default()));
     // A required block known to the protocol but not to this client's kit.
     let stats = card(
         json!([{"kind": "stats", "required": true, "items": [

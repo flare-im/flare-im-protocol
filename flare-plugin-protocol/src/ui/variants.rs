@@ -2,7 +2,16 @@
 //! what it needs from the client ([`UiRequires`]). Core picks the first
 //! variant a client's descriptor satisfies and sends it as a plain
 //! contribution ([`UiContribution::select`]); when none fits, or the build is
-//! below `minClient`, it sends an upgrade placeholder ([`UiUpgrade`]).
+//! below `minClient`, it sends an upgrade placeholder ([`UiUpgrade`]), or,
+//! when only a native capability the host withholds stands in the way (no
+//! newer build changes that), an unsupported placeholder
+//! ([`UiUpgrade::unsupported`]).
+//!
+//! A block that is not `required` is not a requirement: a client that does
+//! not know its kind gets the presentation without it, and without the
+//! actions only it owns ([`UiContribution::strip_for`]), exactly as the
+//! tolerant reading of the client would leave it out
+//! ([`super::lenient::prepare_contribution`]).
 //!
 //! A variant overrides the presentation only: `schema` (with its
 //! `presentation`), `detail`, `source`, `viewerState`, `availability`,
@@ -13,8 +22,9 @@
 //! field the variant leaves out is the base contribution's; `bundle` is
 //! only ever a variant's.
 use super::{
-    ClientUiDescriptor, UiActionTarget, UiDetail, UiDocument, UiEntryAvailability, UiEntrySummary,
-    UiPageSource, UiTranslation, UiViewerState, UiVocabulary, base_vocabulary,
+    ClientUiDescriptor, UiActionTarget, UiBlock, UiDetail, UiDocument, UiEntryAvailability,
+    UiEntrySummary, UiFieldFormat, UiPageSource, UiTranslation, UiViewerState, UiVocabulary,
+    base_vocabulary, lenient::target_known,
 };
 use crate::{
     ProtocolError, Result,
@@ -144,6 +154,18 @@ impl UiRequires {
             .as_ref()
             .is_none_or(|b| valid_bundle_id(&b.id) && b.bridge >= MIN_UI_BUNDLE_BRIDGE)
     }
+    /// Whether a native capability these requirements name is one the
+    /// client's vocabulary version knows (every client knows the
+    /// [`base_vocabulary`] capabilities) but the descriptor does not offer:
+    /// its host withholds it on this platform, so no newer build of the
+    /// client meets these requirements. A vocabulary version that adds
+    /// native capabilities the kits report extends this.
+    pub fn withheld_by_host(&self, descriptor: &ClientUiDescriptor) -> bool {
+        let known = base_vocabulary().native;
+        self.native
+            .iter()
+            .any(|name| known.contains(name) && !descriptor.native.contains(name))
+    }
     /// Whether a client with `descriptor` meets every requirement.
     pub fn satisfied_by(&self, descriptor: &ClientUiDescriptor) -> bool {
         let offered = UiRequires::from_vocabulary(&descriptor.vocabulary());
@@ -245,11 +267,13 @@ impl UiContributionVariant {
     pub fn derived_requires(&self, base: &UiContribution) -> UiRequires {
         base.expand(self).derived_requires()
     }
-    /// What the variant's content uses beyond the [`base_vocabulary`] and
-    /// its `requires` does not state. Publication refuses a variant for which
+    /// What the variant's content uses ([`UiContribution::used_requires`],
+    /// optional blocks included) beyond the [`base_vocabulary`] and its
+    /// `requires` does not state. Publication refuses a variant for which
     /// this is not empty.
     pub fn missing_requires(&self, base: &UiContribution) -> UiRequires {
-        self.derived_requires(base)
+        base.expand(self)
+            .used_requires()
             .beyond(&base_vocabulary())
             .missing_from(&self.requires)
     }
@@ -265,6 +289,24 @@ pub struct UiUpgrade {
     /// contribution's `minClient`), when the plugin names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_build: Option<u64>,
+    /// No build of this client shows it: every presentation needs a native
+    /// capability the host withholds on this platform
+    /// ([`UiRequires::withheld_by_host`]). Clients show it as
+    /// `unsupported_platform`, never with an update offer, and do not list
+    /// it as an entry. Never with `min_build`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unsupported: bool,
+}
+impl UiUpgrade {
+    /// The reason a client shows for the placeholder:
+    /// `unsupported_platform` or `upgrade_required`.
+    pub fn reason(&self) -> super::UiUnavailableReason {
+        if self.unsupported {
+            super::UiUnavailableReason::UnsupportedPlatform
+        } else {
+            super::UiUnavailableReason::UpgradeRequired
+        }
+    }
 }
 
 /// What [`UiContribution::select`] gives a client.
@@ -279,24 +321,32 @@ pub enum Selected {
     },
     /// The upgrade placeholder ([`UiContribution::upgrade`]).
     Upgrade(UiContribution),
+    /// The unsupported placeholder ([`UiUpgrade::unsupported`]): only a
+    /// native capability the host withholds stands in the way.
+    Unsupported(UiContribution),
 }
 impl Selected {
     pub fn contribution(&self) -> &UiContribution {
         match self {
-            Self::Variant { contribution, .. } | Self::Upgrade(contribution) => contribution,
+            Self::Variant { contribution, .. }
+            | Self::Upgrade(contribution)
+            | Self::Unsupported(contribution) => contribution,
         }
     }
     pub fn into_contribution(self) -> UiContribution {
         match self {
-            Self::Variant { contribution, .. } | Self::Upgrade(contribution) => contribution,
+            Self::Variant { contribution, .. }
+            | Self::Upgrade(contribution)
+            | Self::Unsupported(contribution) => contribution,
         }
     }
-    /// `variant`, `fallback` or `upgrade`.
+    /// `variant`, `fallback`, `upgrade` or `unsupported`.
     pub fn outcome(&self) -> &'static str {
         match self {
             Self::Variant { index: 0, .. } => "variant",
             Self::Variant { .. } => "fallback",
             Self::Upgrade(_) => "upgrade",
+            Self::Unsupported(_) => "unsupported",
         }
     }
 }
@@ -356,13 +406,31 @@ impl UiContribution {
     }
 
     /// What this contribution's content uses, read from it: its kind, the
-    /// kinds of every block (sections' included), input and field format of
+    /// kinds and formats of its `required` blocks (a section counts when it
+    /// or a block it holds is required), every input and field format of
     /// its document and detail document, its action target kinds, its
     /// renderer, the native capabilities its actions target, and its bundle
     /// (bridge 1). A client without one of those capabilities does not get
-    /// the presentation: [`Self::select`] tries the next one, an action is
-    /// never stripped. Its own `variants` are not looked at.
+    /// the presentation: [`Self::select`] tries the next one, a required
+    /// block or an action is never stripped. Blocks that are not required,
+    /// and the actions only they own, are not requirements: a client that
+    /// cannot show them gets the presentation without them
+    /// ([`Self::strip_for`]). Its own `variants` are not looked at.
     pub fn derived_requires(&self) -> UiRequires {
+        self.requires_of(false)
+    }
+
+    /// Everything this contribution's content uses: [`Self::derived_requires`]
+    /// with the blocks that are not required, and the actions they own,
+    /// included. A variant states at least this beyond the base vocabulary
+    /// ([`UiContributionVariant::missing_requires`]): a variant exists to
+    /// target what it draws, so its optional blocks are skipped with it, not
+    /// stripped.
+    pub fn used_requires(&self) -> UiRequires {
+        self.requires_of(true)
+    }
+
+    fn requires_of(&self, optional_blocks: bool) -> UiRequires {
         let mut requires = UiRequires::default();
         requires.kinds.insert(self.kind.name().to_owned());
         let documents =
@@ -376,16 +444,34 @@ impl UiContribution {
                     requires.formats.insert(format.kind_name().to_owned());
                 }
             }
+            let (mut needed_owned, mut optional_owned) = (BTreeSet::new(), BTreeSet::new());
             for block in document.all_blocks() {
-                requires.blocks.insert(block.kind_name().to_owned());
-                for format in block.formats() {
-                    requires.formats.insert(format.kind_name().to_owned());
+                let needed = optional_blocks
+                    || block.is_required()
+                    || block.children().iter().any(UiBlock::is_required);
+                if needed {
+                    requires.blocks.insert(block.kind_name().to_owned());
+                    for format in block.formats() {
+                        requires.formats.insert(format.kind_name().to_owned());
+                    }
+                }
+                if !matches!(block, UiBlock::Section(_)) {
+                    let owned = block.owned_actions();
+                    if optional_blocks || block.is_required() {
+                        needed_owned.extend(owned);
+                    } else {
+                        optional_owned.extend(owned);
+                    }
                 }
             }
             for input in &document.inputs {
                 requires.inputs.insert(input.kind.name().to_owned());
             }
             for action in &document.actions {
+                let id = action.id.as_str();
+                if optional_owned.contains(id) && !needed_owned.contains(id) {
+                    continue;
+                }
                 requires
                     .actions
                     .insert(target_kind(&action.target).to_owned());
@@ -406,25 +492,64 @@ impl UiContribution {
     ///   client's for its platform;
     /// - else the first presentation ([`Self::expansions`]) whose written
     ///   and derived requirements, native capabilities included, the
-    ///   descriptor satisfies, as it is (nothing stripped);
+    ///   descriptor satisfies, without the optional blocks the client does
+    ///   not know ([`Self::strip_for`]);
+    /// - else, when every presentation needs a native capability the host
+    ///   withholds ([`UiRequires::withheld_by_host`]), the unsupported
+    ///   placeholder: no newer build would show it;
     /// - else an upgrade placeholder with the platform's `minClient`, if any.
     pub fn select(&self, descriptor: &ClientUiDescriptor) -> Selected {
         let floor = self.min_client.get(&descriptor.platform).copied();
         if floor.is_some_and(|floor| descriptor.app_build < floor) {
             return Selected::Upgrade(self.upgrade_placeholder(floor));
         }
-        for (index, (contribution, written)) in self.expansions().into_iter().enumerate() {
+        let mut updatable = false;
+        for (index, (mut contribution, written)) in self.expansions().into_iter().enumerate() {
             let mut needs = contribution.derived_requires();
             needs.union(&written);
             if !needs.satisfied_by(descriptor) {
+                updatable |= !needs.withheld_by_host(descriptor);
                 continue;
             }
+            contribution.strip_for(&descriptor.vocabulary());
             return Selected::Variant {
                 contribution,
                 index,
             };
         }
-        Selected::Upgrade(self.upgrade_placeholder(floor))
+        if updatable {
+            Selected::Upgrade(self.upgrade_placeholder(floor))
+        } else {
+            Selected::Unsupported(self.unsupported_placeholder())
+        }
+    }
+
+    /// The contribution as a client with `vocabulary` reads it: in its
+    /// document and detail document, every block of a kind the client does
+    /// not know goes (a section left without blocks too), with the actions
+    /// it owns unless a kept block owns them as well; formats the client
+    /// does not know go from the blocks that stay; actions the client
+    /// cannot run go with every reference to them. The same result as the
+    /// client's tolerant reading ([`super::lenient::prepare_contribution`]);
+    /// [`Self::select`] applies it to the presentation it chose, whose
+    /// required content the client knows.
+    pub fn strip_for(&mut self, vocabulary: &UiVocabulary) {
+        strip_document(&mut self.schema, vocabulary);
+        if let Some(detail) = &mut self.detail {
+            strip_document(&mut detail.document, vocabulary);
+        }
+    }
+
+    /// The unsupported placeholder of this contribution: the upgrade
+    /// placeholder ([`Self::upgrade_placeholder`]) marked
+    /// [`UiUpgrade::unsupported`], without a build.
+    pub fn unsupported_placeholder(&self) -> UiContribution {
+        let mut placeholder = self.upgrade_placeholder(None);
+        placeholder.upgrade = Some(UiUpgrade {
+            min_build: None,
+            unsupported: true,
+        });
+        placeholder
     }
 
     /// The upgrade placeholder of this contribution: its identity, a
@@ -477,7 +602,10 @@ impl UiContribution {
             variants: Vec::new(),
             min_client: BTreeMap::new(),
             variant: None,
-            upgrade: Some(UiUpgrade { min_build }),
+            upgrade: Some(UiUpgrade {
+                min_build,
+                unsupported: false,
+            }),
             bundle: None,
         }
     }
@@ -541,5 +669,69 @@ impl UiContribution {
             }
         }
         Ok(())
+    }
+}
+
+/// [`UiContribution::strip_for`] over one document.
+fn strip_document(document: &mut UiDocument, vocabulary: &UiVocabulary) {
+    let mut dropped = BTreeSet::new();
+    strip_blocks(&mut document.blocks, vocabulary, &mut dropped);
+    let kept: BTreeSet<String> = document
+        .blocks
+        .iter()
+        .flat_map(UiBlock::owned_actions)
+        .map(str::to_owned)
+        .collect();
+    dropped.retain(|id| !kept.contains(id));
+    dropped.extend(
+        document
+            .actions
+            .iter()
+            .filter(|action| !target_known(&action.target, vocabulary))
+            .map(|action| action.id.clone()),
+    );
+    if !dropped.is_empty() {
+        document.retain_actions(&mut |id| !dropped.contains(id));
+    }
+}
+
+/// Keep the blocks `vocabulary` knows, adding the actions of those that go
+/// to `dropped`, and take the unknown formats out of those that stay.
+fn strip_blocks(
+    blocks: &mut Vec<UiBlock>,
+    vocabulary: &UiVocabulary,
+    dropped: &mut BTreeSet<String>,
+) {
+    blocks.retain_mut(|block| {
+        let mut known = vocabulary.blocks.contains(block.kind_name());
+        if known && let UiBlock::Section(section) = block {
+            strip_blocks(&mut section.blocks, vocabulary, dropped);
+            known = !section.blocks.is_empty();
+        }
+        if known {
+            for format in formats_mut(block) {
+                if format
+                    .as_ref()
+                    .is_some_and(|f| !vocabulary.formats.contains(f.kind_name()))
+                {
+                    *format = None;
+                }
+            }
+        } else {
+            dropped.extend(block.owned_actions().into_iter().map(str::to_owned));
+        }
+        known
+    });
+}
+
+/// The format slots of a block ([`UiBlock::formats`], mutable).
+fn formats_mut(block: &mut UiBlock) -> Vec<&mut Option<UiFieldFormat>> {
+    match block {
+        UiBlock::Fields(b) => b.fields.iter_mut().map(|f| &mut f.format).collect(),
+        UiBlock::Rows(b) => b.columns.iter_mut().map(|c| &mut c.value_format).collect(),
+        UiBlock::Stats(b) => b.items.iter_mut().map(|i| &mut i.format).collect(),
+        UiBlock::Chart(b) => vec![&mut b.format],
+        UiBlock::Hero(b) => vec![&mut b.format],
+        _ => Vec::new(),
     }
 }

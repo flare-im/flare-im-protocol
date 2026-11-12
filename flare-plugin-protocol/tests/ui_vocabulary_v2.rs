@@ -529,6 +529,77 @@ fn money_is_a_bounded_decimal_in_one_currency() {
 }
 
 #[test]
+fn a_money_input_reads_its_scale_and_needs_its_currency() {
+    let raw = money(
+        json!({"money": {"currencyPath": "/unit/code", "scalePath": "/unit/scale",
+                                     "min": "1", "maxPath": "/max"}}),
+    );
+    assert!(valid(raw.clone()));
+    let ok = |amount: &str| json!({"amount": amount, "currency": "PTS"});
+    // Scale 0 (points): no fraction digits, and the bound reads in that scale.
+    let points = json!({"unit": {"code": "PTS", "scale": 0}, "max": "100.00"});
+    assert_eq!(submit(raw.clone(), points.clone(), ok("100")), Ok(()));
+    assert_eq!(
+        submit(raw.clone(), points.clone(), ok("1.50")),
+        Err(vec![UiFormIssue::InvalidType])
+    );
+    assert_eq!(
+        submit(raw.clone(), points.clone(), ok("101")),
+        Err(vec![UiFormIssue::OutOfRange])
+    );
+    let view = resolve(raw.clone(), points);
+    let rules = view.inputs[0].money.as_ref().unwrap();
+    assert_eq!((rules.scale, rules.max.as_deref()), (Some(0), Some("100")));
+    assert!(rules.scale_path.is_none());
+    // Scale 3: sub-cent amounts, and a bound formatted with three digits stays.
+    let fine = json!({"unit": {"code": "PTS", "scale": "3"}, "max": "100.000"});
+    assert_eq!(
+        submit(raw.clone(), fine.clone(), ok("0.005")),
+        Err(vec![UiFormIssue::OutOfRange])
+    );
+    assert_eq!(submit(raw.clone(), fine.clone(), ok("1.005")), Ok(()));
+    assert_eq!(
+        submit(raw.clone(), fine.clone(), ok("100.001")),
+        Err(vec![UiFormIssue::OutOfRange])
+    );
+    // A maximum finer than the scale is rounded down, never dropped.
+    let coarse = json!({"unit": {"code": "PTS", "scale": 1}, "max": "9.99"});
+    let view = resolve(raw.clone(), coarse);
+    assert_eq!(
+        view.inputs[0].money.as_ref().unwrap().max.as_deref(),
+        Some("9.9")
+    );
+    // A scale out of range is not taken: the declared default stands.
+    let wild = json!({"unit": {"code": "PTS", "scale": 40}, "max": "10"});
+    assert_eq!(
+        view_scale(&raw, wild),
+        None,
+        "the default scale (2) applies"
+    );
+    // A currency path that reads nothing: no currency, and no value is accepted.
+    let none = json!({"unit": {"scale": 2}, "max": "10"});
+    assert_eq!(
+        submit(raw.clone(), none.clone(), ok("1")),
+        Err(vec![UiFormIssue::NotAChoice])
+    );
+    assert!(
+        resolve(raw, none).inputs[0]
+            .money
+            .as_ref()
+            .unwrap()
+            .currency
+            .is_none()
+    );
+}
+fn view_scale(raw: &Value, data: Value) -> Option<u8> {
+    resolve(raw.clone(), data).inputs[0]
+        .money
+        .as_ref()
+        .unwrap()
+        .scale
+}
+
+#[test]
 fn image_and_document_inputs_are_private_image_uploads() {
     let upload = |accept: Value| {
         json!({"accept": accept, "maxBytes": 1_048_576, "upload": {

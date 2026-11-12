@@ -288,6 +288,20 @@ impl ClientUiDescriptor {
         }
     }
 
+    /// A descriptor as a client sent it: `raw` at most
+    /// [`MAX_UI_DESCRIPTOR_BYTES`] as sent (unknown fields and repeated set
+    /// entries count, so the bound holds for what is parsed, not only for
+    /// what is kept), then read and validated ([`Self::validate`]).
+    pub fn from_value(raw: &serde_json::Value) -> Result<Self> {
+        let refuse = || ProtocolError::Denied("invalid client UI descriptor");
+        if serde_json::to_vec(raw).map_or(true, |v| v.len() > MAX_UI_DESCRIPTOR_BYTES) {
+            return Err(refuse());
+        }
+        let descriptor = Self::deserialize(raw).map_err(|_| refuse())?;
+        descriptor.validate()?;
+        Ok(descriptor)
+    }
+
     /// At most [`MAX_UI_DESCRIPTOR_BYTES`] serialized, a positive vocabulary
     /// version, a channel of `[a-z0-9._-]{1,32}`, sets of at most 128 names
     /// of `[A-Za-z0-9._-]{1,64}`, and a bundle runtime with a positive bridge

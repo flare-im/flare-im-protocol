@@ -2359,7 +2359,8 @@ impl UiCatalog {
     /// - an expired catalog: `catalog_unreachable` (the host reads a fresh one);
     /// - a plugin that does not list the platform: `unsupported_platform`;
     /// - an upgrade placeholder ([`UiContribution::upgrade`]):
-    ///   `upgrade_required`;
+    ///   `upgrade_required`; an unsupported one ([`UiUpgrade::unsupported`]):
+    ///   `unsupported_platform`;
     /// - an invalid envelope, an unknown contribution, schema version or kind,
     ///   or an invalid document: `incompatible_version`.
     pub fn unavailable_reason(
@@ -2406,12 +2407,10 @@ impl UiCatalog {
                     && c.schema_version == message.schema_version
                     && c.kind == context.kind
             })
-            .map_or(Ok(None), |c| {
-                if c.upgrade.is_some() {
-                    Err(UiUnavailableReason::UpgradeRequired)
-                } else {
-                    Ok(Some(c))
-                }
+            .map_or(Ok(None), |c| match &c.upgrade {
+                // An upgrade placeholder, or an unsupported one.
+                Some(upgrade) => Err(upgrade.reason()),
+                None => Ok(Some(c)),
             })?
             .filter(|contribution| {
                 contribution.schema.validate().is_ok()
@@ -2532,6 +2531,7 @@ impl UiCatalog {
     /// - a plugin that does not list the platform: `unsupported_platform`;
     /// - an upgrade placeholder ([`UiContribution::upgrade`]):
     ///   `upgrade_required` (show [`ResolvedPluginView::upgrade_required_entry`]);
+    ///   an unsupported one ([`UiUpgrade::unsupported`]): `unsupported_platform`;
     /// - no such page, another schema version or an invalid document or
     ///   source: `incompatible_version`;
     /// - a source operation the catalog does not offer the viewer:
@@ -2566,12 +2566,10 @@ impl UiCatalog {
             .contributions
             .iter()
             .find(|c| c.id == page && c.kind == UiContributionKind::Page && c.schema_version == 1)
-            .map_or(Ok(None), |c| {
-                if c.upgrade.is_some() {
-                    Err(UiUnavailableReason::UpgradeRequired)
-                } else {
-                    Ok(Some(c))
-                }
+            .map_or(Ok(None), |c| match &c.upgrade {
+                // An upgrade placeholder, or an unsupported one.
+                Some(upgrade) => Err(upgrade.reason()),
+                None => Ok(Some(c)),
             })?
             .filter(|c| {
                 c.schema.validate().is_ok()
