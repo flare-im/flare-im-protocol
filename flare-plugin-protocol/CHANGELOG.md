@@ -14,6 +14,8 @@
   `banner` 至多 2 个。
 - 输入：`money`（值为 `{amount, currency}`，金额是十进制字符串）、`image`、`document`（带 `side`）。
 - 格式：`percent`、`duration`、`count`、`bytes`。
+- 字段：`entries.timePath`（条目时间）、`rows.groupByDay`（按首个 `time` 列分日标题）、
+  `hero.maskable`（查看者可隐藏数值）。
 - 原生能力：`paymentConfirmation`、`documentCapture`、`locationOnce`、`rtcSession`；
   原生动作目标增加 `params`（每个能力固定结构）和 `into`（结果写入同文档的输入）。
 

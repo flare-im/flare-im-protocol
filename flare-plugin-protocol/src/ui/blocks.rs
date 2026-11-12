@@ -365,6 +365,10 @@ pub struct UiEntriesBlock {
     /// a label and a tone (a ledger line's kind).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_labels: Option<UiValueLabels>,
+    /// Inside an entry: when it happened (epoch milliseconds, integer or digit
+    /// string), shown beside it in the viewer's time zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_path: Option<String>,
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
@@ -586,6 +590,12 @@ pub struct UiRowsBlock {
     pub value_labels: Option<UiValueLabels>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub presentation: UiRowsPresentation,
+    /// Rows go under day headings (today, yesterday, a date) in the viewer's
+    /// time zone, by the first `time` column; consecutive rows of one day
+    /// share a heading, so the plugin sends them in time order. Requires a
+    /// `time` column.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub group_by_day: bool,
     /// Not shown when any condition matches (`0..=4`). Unlike the row
     /// actions' conditions these read the page (the source result), not a row.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -833,6 +843,10 @@ pub struct UiHeroBlock {
     pub subtitle_path: Option<String>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub tone: UiHeroTone,
+    /// The viewer can hide the value (a balance on a shared screen): the kit
+    /// offers an eye toggle and draws the hidden value as dots. Starts shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub maskable: bool,
     /// Ids of document actions (`0..=3`, unique) the block owns and shows as
     /// its buttons; their `hiddenWhen` applies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1104,6 +1118,9 @@ pub struct ResolvedUiHero {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
     pub tone: UiHeroTone,
+    /// The viewer can hide the value ([`UiHeroBlock::maskable`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub maskable: bool,
     /// The visible owned actions, resolved; empty on a read-only copy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<UiAction>,
@@ -1227,6 +1244,9 @@ pub struct ResolvedUiEntry {
     /// The entry's badge, from the block's `valueLabels`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub badge: Option<ResolvedUiBadge>,
+    /// When it happened ([`UiEntriesBlock::time_path`]), epoch milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_ms: Option<i64>,
 }
 /// An item's enumerated value as words and a tone ([`UiValueLabels`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1354,6 +1374,10 @@ pub struct ResolvedUiRows {
     pub filters: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub presentation: UiRowsPresentation,
+    /// Group the rows under day headings by the first `time` column
+    /// ([`UiRowsBlock::group_by_day`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub group_by_day: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1682,6 +1706,7 @@ impl UiBlock {
                         &b.group_label_path,
                         &b.group_count_path,
                         &b.group_total_path,
+                        &b.time_path,
                     ]
                     .into_iter()
                     .all(optional_path)
@@ -1741,6 +1766,8 @@ impl UiBlock {
                             })
                     })
                     && optional_path(&b.cursor_path)
+                    && (!b.group_by_day
+                        || b.columns.iter().any(|c| c.format == UiColumnFormat::Time))
                     && b.actions.len() <= MAX_UI_ROW_ACTIONS
                     && b.actions
                         .iter()
@@ -2147,6 +2174,7 @@ impl UiBlock {
                     format,
                     subtitle: non_blank(at(scope.data, &b.subtitle_path)),
                     tone: b.tone,
+                    maskable: b.maskable,
                     actions: b
                         .actions
                         .iter()
@@ -2500,6 +2528,11 @@ impl UiEntriesBlock {
                     user_id: user,
                     group,
                     badge: badge(&self.value_labels, item, scope.translation),
+                    time_ms: self
+                        .time_path
+                        .as_deref()
+                        .and_then(|p| item.pointer(p))
+                        .and_then(as_instant),
                 })
             })
             .collect();
@@ -2631,6 +2664,7 @@ impl UiRowsBlock {
             empty_text: label(scope, &self.empty_text),
             filters: self.filters.clone(),
             presentation: self.presentation,
+            group_by_day: self.group_by_day,
         })
     }
 }

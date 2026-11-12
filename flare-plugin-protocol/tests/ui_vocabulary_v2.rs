@@ -873,3 +873,68 @@ fn image_assets_and_qr_refreshes_are_declared() {
             .contains("example.poll.code")
     );
 }
+
+// ---- entry times, day headings, maskable heroes ----
+
+#[test]
+fn an_entry_carries_its_time() {
+    let view = resolve(
+        with_blocks(
+            json!([{"kind": "entries", "itemsPath": "/claims", "userPath": "/id",
+            "textPath": "/amount", "timePath": "/at", "numbered": false}]),
+        ),
+        json!({"claims": [{"id": "u1", "amount": "1.00", "at": 1_700_000_000_000_i64},
+                          {"id": "u2", "amount": "2.00", "at": "1700000060000"},
+                          {"id": "u3", "amount": "3.00"}]}),
+    );
+    let ResolvedUiBlock::Entries(entries) = only(&view) else {
+        panic!("{view:#?}")
+    };
+    let times: Vec<_> = entries.items.iter().map(|e| e.time_ms).collect();
+    assert_eq!(
+        times,
+        [Some(1_700_000_000_000), Some(1_700_000_060_000), None]
+    );
+    assert!(!valid(with_blocks(
+        json!([{"kind": "entries", "itemsPath": "/claims", "timePath": "at"}])
+    )));
+}
+
+#[test]
+fn rows_grouped_by_day_need_a_time_column() {
+    let rows = |columns: Value| {
+        json!({"title": "t", "blocks": [{"kind": "rows", "source": "example.poll.mine",
+            "path": "/rows", "keyPath": "/id", "columns": columns, "groupByDay": true}]})
+    };
+    assert!(valid(rows(
+        json!([{"label": "金额", "path": "/amount"}, {"label": "时间", "path": "/at", "format": "time"}])
+    )));
+    assert!(!valid(rows(json!([{"label": "金额", "path": "/amount"}]))));
+}
+
+#[test]
+fn a_maskable_hero_says_so() {
+    let hero = |extra: Value| {
+        let mut block = json!({"kind": "hero", "label": "可用余额", "amountPath": "/balance"});
+        for (key, value) in extra.as_object().unwrap() {
+            block[key] = value.clone();
+        }
+        resolve(with_blocks(json!([block])), json!({"balance": "12.00"}))
+    };
+    let ResolvedUiBlock::Hero(masked) = only(&hero(json!({"maskable": true}))).clone() else {
+        panic!()
+    };
+    assert!(masked.maskable);
+    assert_eq!(masked.value, "12.00");
+    let plain = hero(json!({}));
+    let ResolvedUiBlock::Hero(shown) = only(&plain) else {
+        panic!()
+    };
+    assert!(!shown.maskable);
+    assert!(
+        serde_json::to_value(shown)
+            .unwrap()
+            .get("maskable")
+            .is_none()
+    );
+}
