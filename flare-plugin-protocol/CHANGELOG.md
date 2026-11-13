@@ -5,6 +5,13 @@
 
 ## 未发布
 
+### 客户端读取
+
+- `json::from_value`：客户端读 JSON 值的唯一入口，与 `serde_json::from_value` 一致，只是结构体只从对象读，
+  按字段顺序写成的数组被拒绝（`invalid type: sequence, expected struct …`）。`kind` 标签枚举的变体经它读取。
+- `ui::ShownPluginView`：宿主传回的视图（`previous`）按 JSON 保留，翻页只追加条目与行，结果与
+  `ResolvedPluginView::append_page` 相同；客户端不再把解析后的视图读回类型。
+
 ### UI 词汇版本 2
 
 在版本 1（`ui::base_vocabulary()`）之上新增：
