@@ -398,7 +398,7 @@ impl UiMoneyInput {
     /// Check a submitted value.
     fn check(&self, value: &Value) -> std::result::Result<(), UiFormIssue> {
         let money: UiMoneyValue =
-            serde_json::from_value(value.clone()).map_err(|_| UiFormIssue::InvalidType)?;
+            crate::json::from_value(value.clone()).map_err(|_| UiFormIssue::InvalidType)?;
         if !is_ui_decimal(&money.amount, self.check_scale()) || !valid_currency(&money.currency) {
             return Err(UiFormIssue::InvalidType);
         }
@@ -780,7 +780,7 @@ impl UiInput {
             (Select, Value::String(s)) => self.is_choice(s),
             (Datetime, Value::Number(n)) => n.as_i64().is_some_and(|v| v >= 0),
             (File | Image | Document, Value::Object(_)) => {
-                serde_json::from_value::<UiFileReference>(value.clone())
+                crate::json::from_value::<UiFileReference>(value.clone())
                     .is_ok_and(|file| file.is_valid())
             }
             (Money, Value::Object(_)) => self
@@ -802,7 +802,7 @@ impl UiInput {
     /// A `location` value of this input's precision.
     fn location_fits(&self, value: &Value) -> bool {
         self.precision.is_some_and(|precision| {
-            serde_json::from_value::<UiLocationValue>(value.clone())
+            crate::json::from_value::<UiLocationValue>(value.clone())
                 .is_ok_and(|fix| fix.fits(precision))
         })
     }
@@ -839,7 +839,7 @@ impl UiInput {
             .choices_path
             .as_deref()
             .and_then(|p| data.pointer(p))
-            .and_then(|v| serde_json::from_value::<Vec<UiInputChoice>>(v.clone()).ok())
+            .and_then(|v| crate::json::from_value::<Vec<UiInputChoice>>(v.clone()).ok())
         {
             let mut candidate = input.clone();
             candidate.choices = choices;
@@ -935,7 +935,7 @@ impl UiInput {
                 None => Err(InvalidType),
             },
             (File | Image | Document, Value::Object(_)) => {
-                serde_json::from_value::<UiFileReference>(value.clone())
+                crate::json::from_value::<UiFileReference>(value.clone())
                     .ok()
                     .filter(UiFileReference::is_valid)
                     .map(|_| value.clone())

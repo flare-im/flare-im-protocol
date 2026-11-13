@@ -451,7 +451,7 @@ fn a_page_resolves_against_its_source_result_with_badges_and_paging() {
             "u1",
         )
         .unwrap();
-    merged.append_page(next);
+    append_both(&mut merged, next);
     assert_eq!(merged.next_cursor, None);
     let ResolvedUiBlock::Rows(rows) = &merged.blocks[1] else {
         panic!()
@@ -835,4 +835,27 @@ fn password_fields_have_no_prefill_and_never_enter_durable_commands() {
     value["clientExtensions"]["contributions"][i]["schema"]["actions"][0]["continuation"]["actionId"] =
         json!("bad action");
     assert!(parse(&value).is_err());
+}
+
+/// Append `page` to `view`, and check that the shown-view append a client
+/// runs on the JSON a host passed back gives the same view.
+fn append_both(
+    view: &mut flare_plugin_protocol::ui::ResolvedPluginView,
+    page: flare_plugin_protocol::ui::ResolvedPluginView,
+) {
+    use flare_plugin_protocol::ui::{ResolvedUiBlock, ShownPluginView};
+    let mut shown = ShownPluginView::from_value(serde_json::to_value(&*view).unwrap()).unwrap();
+    let (entries, rows) = view
+        .blocks
+        .iter()
+        .fold((0, 0), |(e, r), block| match block {
+            ResolvedUiBlock::Entries(block) => (e + block.items.len(), r),
+            ResolvedUiBlock::Rows(block) => (e, r + block.rows.len()),
+            _ => (e, r),
+        });
+    assert_eq!((shown.entries(), shown.rows()), (entries, rows));
+    assert_eq!(shown.next_cursor(), view.next_cursor.as_deref());
+    shown.append_page(page.clone());
+    view.append_page(page);
+    assert_eq!(shown.into_value(), serde_json::to_value(&*view).unwrap());
 }

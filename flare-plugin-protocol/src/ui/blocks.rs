@@ -2140,7 +2140,7 @@ impl UiBlock {
             Self::Image(b) => {
                 let file_id = match &b.source.file_path {
                     Some(path) => Some(
-                        serde_json::from_value::<super::UiFileReference>(
+                        crate::json::from_value::<super::UiFileReference>(
                             scope.data.pointer(path)?.clone(),
                         )
                         .ok()
@@ -2196,7 +2196,7 @@ impl UiBlock {
                     .iter()
                     .map(|step| {
                         non_blank(scope.data.pointer(&step.state_path)).map(|raw| {
-                            serde_json::from_value::<UiStepState>(Value::String(raw))
+                            crate::json::from_value::<UiStepState>(Value::String(raw))
                                 .unwrap_or_default()
                         })
                     })

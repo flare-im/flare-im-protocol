@@ -58,7 +58,7 @@ pub fn prepare_contribution(raw: &Value, vocabulary: &UiVocabulary) -> Prepared 
         .get("kind")
         .and_then(Value::as_str)
         .filter(|kind| vocabulary.kinds.contains(*kind))
-        .and_then(|kind| serde_json::from_value::<UiContributionKind>(Value::from(kind)).ok())
+        .and_then(|kind| crate::json::from_value::<UiContributionKind>(Value::from(kind)).ok())
     else {
         return Prepared::Dropped;
     };
@@ -69,7 +69,7 @@ pub fn prepare_contribution(raw: &Value, vocabulary: &UiVocabulary) -> Prepared 
     if prepare_documents(&mut cleaned, vocabulary).is_none() {
         return Prepared::Upgrade(fallback);
     }
-    let Ok(mut contribution) = serde_json::from_value::<UiContribution>(cleaned) else {
+    let Ok(mut contribution) = crate::json::from_value::<UiContribution>(cleaned) else {
         return Prepared::Upgrade(fallback);
     };
     contribution.schema.retain_actions(&mut |_| true);
@@ -123,14 +123,14 @@ fn prepare_document(document: &mut Value, vocabulary: &UiVocabulary) -> Option<(
                 .get("kind")
                 .and_then(Value::as_str)
                 .is_some_and(|kind| vocabulary.inputs.contains(kind));
-            if !known || serde_json::from_value::<UiInput>(input.clone()).is_err() {
+            if !known || crate::json::from_value::<UiInput>(input.clone()).is_err() {
                 return None;
             }
         }
     }
     if let Some(Value::Array(actions)) = document.get_mut("actions") {
         actions.retain(|action| {
-            let runnable = serde_json::from_value::<UiAction>(action.clone())
+            let runnable = crate::json::from_value::<UiAction>(action.clone())
                 .is_ok_and(|action| target_known(&action.target, vocabulary));
             let id = action.get("id").and_then(Value::as_str);
             if !runnable && let Some(id) = id {
@@ -179,7 +179,7 @@ fn prepare_block(
         }
         degrade_formats(block, vocabulary);
     }
-    if known && serde_json::from_value::<UiBlock>(block.clone()).is_ok() {
+    if known && crate::json::from_value::<UiBlock>(block.clone()).is_ok() {
         return Some(true);
     }
     if required {
@@ -238,7 +238,7 @@ fn degrade_format(object: &mut Value, key: &str, vocabulary: &UiVocabulary) {
                 .get("kind")
                 .and_then(Value::as_str)
                 .is_some_and(|kind| vocabulary.formats.contains(kind))
-                || serde_json::from_value::<UiFieldFormat>(format.clone()).is_err())
+                || crate::json::from_value::<UiFieldFormat>(format.clone()).is_err())
     });
     if unreadable {
         object.remove(key);

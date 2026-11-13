@@ -116,7 +116,7 @@ impl SharedState {
         let Some(raw) = data.get("sharedState").filter(|v| !v.is_null()) else {
             return Ok(None);
         };
-        let state: Self = serde_json::from_value(raw.clone())
+        let state: Self = crate::json::from_value(raw.clone())
             .map_err(|_| ProtocolError::Denied("invalid plugin shared state"))?;
         state.validate()?;
         Ok(Some(state))

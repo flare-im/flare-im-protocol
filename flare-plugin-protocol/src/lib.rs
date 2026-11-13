@@ -8,6 +8,7 @@ pub mod configuration;
 pub mod data;
 pub mod event;
 pub mod invocation;
+pub mod json;
 pub mod lifecycle;
 pub mod manifest;
 pub mod package;

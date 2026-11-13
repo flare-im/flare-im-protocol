@@ -39,11 +39,13 @@ mod descriptor;
 mod formats;
 mod inputs;
 pub mod lenient;
+mod shown;
 mod variants;
 pub use blocks::*;
 pub use descriptor::*;
 pub use formats::*;
 pub use inputs::*;
+pub use shown::*;
 pub use variants::*;
 
 use crate::{
@@ -350,7 +352,7 @@ impl UiViewerState {
         Some(
             items
                 .iter()
-                .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                .filter_map(|item| crate::json::from_value(item.clone()).ok())
                 .collect(),
         )
     }
@@ -963,7 +965,7 @@ impl PaymentConfirmationOrder {
     /// belongs to the same plugin.
     pub fn from_result(plugin_id: &str, data: &Value) -> Option<Self> {
         let order: Self =
-            serde_json::from_value(data.get(PAYMENT_CONFIRMATION_KEY)?.clone()).ok()?;
+            crate::json::from_value(data.get(PAYMENT_CONFIRMATION_KEY)?.clone()).ok()?;
         (order.validate().is_ok() && order.operation.starts_with(&format!("{plugin_id}.")))
             .then_some(order)
     }
@@ -1746,7 +1748,7 @@ impl PluginMessage {
     /// post: `data.message`, only when it is a valid message of that same plugin.
     /// Anything else (absent, malformed, another plugin's card) posts nothing.
     pub fn from_result(plugin_id: &str, data: &Value) -> Option<Self> {
-        let message: Self = serde_json::from_value(data.get("message")?.clone()).ok()?;
+        let message: Self = crate::json::from_value(data.get("message")?.clone()).ok()?;
         (message.plugin_id == plugin_id && message.validate().is_ok()).then_some(message)
     }
     pub fn validate(&self) -> Result<()> {
@@ -1913,6 +1915,8 @@ impl ResolvedPluginView {
     /// fields, actions, menu, inputs, other blocks) stays as on the first
     /// page; `nextCursor` becomes the page's. An unavailable view or page
     /// ends paging without changing the entries or rows.
+    /// [`ShownPluginView::append_page`] does the same to a view a host
+    /// passed back as JSON.
     pub fn append_page(&mut self, page: ResolvedPluginView) {
         if !self.available || !page.available {
             self.next_cursor = None;
