@@ -9,6 +9,7 @@ pub mod command;
 pub mod configuration;
 pub mod data;
 pub mod event;
+pub mod fields;
 pub mod invocation;
 pub mod json;
 pub mod lifecycle;

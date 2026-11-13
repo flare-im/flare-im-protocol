@@ -815,6 +815,9 @@ impl NativeCapability {
         Self::LocationOnce,
         Self::RtcSession,
     ];
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|known| known.name() == name)
+    }
     /// The wire name (`selectImage`, ...).
     pub fn name(self) -> &'static str {
         match self {

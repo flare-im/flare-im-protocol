@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::bundle::{BundleManifest, WebBundleDecl, is_https_url};
+use crate::fields::Fields;
 use crate::ui::{
     ClientPlugin, MAX_UI_ACTION_INPUT_BYTES, MAX_UI_TEXT_BYTES, NativeCapability,
     valid_bundle_route,
@@ -381,16 +382,41 @@ impl BridgeEnvelope {
             .and_then(Value::as_str)
             .filter(|id| valid_request_id(id))
             .map(str::to_owned);
-        let envelope: Self = crate::json::from_value(value)
-            .map_err(|_| (id.clone(), BridgeErrorCode::InvalidEnvelope))?;
-        if envelope.kind != BridgeMessageType::Request {
-            return Err((id, BridgeErrorCode::InvalidEnvelope));
-        }
+        // Only a request is accepted, so every other shape is the same
+        // `invalid_envelope`, whatever field made it so.
+        let envelope =
+            Self::read_request(value).ok_or((id.clone(), BridgeErrorCode::InvalidEnvelope))?;
         envelope.validate().map_err(|code| (id.clone(), code))?;
         if envelope.bridge == 0 || envelope.bridge > host_bridge {
             return Err((id, BridgeErrorCode::UnsupportedBridge));
         }
         Ok(envelope)
+    }
+
+    /// A request envelope read as its derived `Deserialize` would, `None` for
+    /// anything else: unknown fields, a field of the wrong type, another
+    /// `type`, or a field a request never has.
+    fn read_request(value: Value) -> Option<Self> {
+        let mut f = Fields::new(
+            value,
+            &[
+                "bridge", "id", "type", "method", "params", "result", "error", "event", "payload",
+            ],
+        )?;
+        let bridge = f.u32("bridge")?;
+        let id = f.opt_string("id")?;
+        let method = f.opt_string("method")?;
+        (f.string("type")? == "request"
+            && ["result", "error", "event", "payload"]
+                .iter()
+                .all(|key| f.optional(key).is_none()))
+        .then(|| Self {
+            bridge,
+            id,
+            method,
+            params: f.optional("params"),
+            ..Self::empty(BridgeMessageType::Request, None)
+        })
     }
 
     /// The fields of its type and no other: a request has a valid `id` and
@@ -584,6 +610,10 @@ impl BridgeErrorCode {
         }
     }
 
+    pub fn parse(code: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|known| known.code() == code)
+    }
+
     /// The kit string key: `plugin.bridge.<lowerCamelCode>`.
     pub fn message_key(self) -> &'static str {
         match self {
@@ -670,6 +700,16 @@ pub enum BridgeThemeMode {
     Dark,
 }
 
+impl BridgeThemeMode {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+}
+
 /// The host theme: its mode and the kit tokens the SDK maps to CSS
 /// variables (name to CSS value).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -678,6 +718,28 @@ pub struct BridgeTheme {
     pub mode: BridgeThemeMode,
     #[serde(default)]
     pub tokens: BTreeMap<String, String>,
+}
+
+impl BridgeTheme {
+    /// Read as its derived `Deserialize` would.
+    pub fn read(value: Value) -> Option<Self> {
+        let mut f = Fields::new(value, &["mode", "tokens"])?;
+        Some(Self {
+            mode: f.name("mode", BridgeThemeMode::parse)?,
+            tokens: {
+                // Inserted one by one: collecting would sort, a second copy
+                // of the map's ordering code.
+                let mut tokens = BTreeMap::new();
+                for (name, value) in f.object_or_empty("tokens")? {
+                    let Value::String(css) = value else {
+                        return None;
+                    };
+                    tokens.insert(name, css);
+                }
+                tokens
+            },
+        })
+    }
 }
 
 /// Where the bundle is shown (design 8.9).
@@ -692,6 +754,17 @@ pub enum BridgePresentation {
     ComposerForm,
 }
 
+impl BridgePresentation {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "page" => Some(Self::Page),
+            "detail" => Some(Self::Detail),
+            "composerForm" => Some(Self::ComposerForm),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeConversation {
@@ -699,6 +772,17 @@ pub struct BridgeConversation {
     /// `single`, `group`, ... as the host names conversation types.
     #[serde(rename = "type")]
     pub kind: String,
+}
+
+impl BridgeConversation {
+    /// Read as its derived `Deserialize` would.
+    pub fn read(value: Value) -> Option<Self> {
+        let mut f = Fields::new(value, &["id", "type"])?;
+        Some(Self {
+            id: f.string("id")?,
+            kind: f.string("type")?,
+        })
+    }
 }
 
 /// `host.hello` parameters.
@@ -820,6 +904,17 @@ pub enum UiToastKind {
     Error,
 }
 
+impl UiToastKind {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "info" => Some(Self::Info),
+            "success" => Some(Self::Success),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiToastParams {
@@ -844,6 +939,17 @@ pub struct UiConfirmParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiConfirmResult {
     pub confirmed: bool,
+}
+
+impl UiConfirmResult {
+    /// Read as its derived `Deserialize` would.
+    pub fn read(value: Value) -> Option<Self> {
+        let mut f = Fields::new(value, &["confirmed"])?;
+        match f.take("confirmed")? {
+            Value::Bool(confirmed) => Some(Self { confirmed }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -979,6 +1085,18 @@ pub enum DiagLevel {
     Error,
 }
 
+impl DiagLevel {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "debug" => Some(Self::Debug),
+            "info" => Some(Self::Info),
+            "warn" => Some(Self::Warn),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagLogParams {
@@ -992,10 +1110,29 @@ pub struct LocaleChangedPayload {
     pub locale: String,
 }
 
+impl LocaleChangedPayload {
+    /// Read as its derived `Deserialize` would.
+    pub fn read(value: Value) -> Option<Self> {
+        Some(Self {
+            locale: Fields::new(value, &["locale"])?.string("locale")?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VisibilityChangedPayload {
     pub visible: bool,
+}
+
+impl VisibilityChangedPayload {
+    /// Read as its derived `Deserialize` would.
+    pub fn read(value: Value) -> Option<Self> {
+        match Fields::new(value, &["visible"])?.take("visible")? {
+            Value::Bool(visible) => Some(Self { visible }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1054,10 +1191,6 @@ pub enum BridgeRequest {
     DiagLog(DiagLogParams),
 }
 
-fn read<T: serde::de::DeserializeOwned>(params: Value) -> Result<T, BridgeErrorCode> {
-    crate::json::from_value(params).map_err(|_| BridgeErrorCode::InvalidParams)
-}
-
 fn serialized_len(value: &Value) -> usize {
     serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
 }
@@ -1095,31 +1228,120 @@ fn operation_input_ok(operation: &str, input: &Value) -> Result<(), BridgeErrorC
 impl BridgeRequest {
     /// Reads and bounds the parameters of `method`.
     pub fn decode(method: BridgeMethod, params: Value) -> Result<Self, BridgeErrorCode> {
-        let request = match method {
-            BridgeMethod::HostHello => Self::Hello(read(params)?),
-            BridgeMethod::PluginQuery => Self::PluginQuery(read(params)?),
-            BridgeMethod::PluginCommand => Self::PluginCommand(read(params)?),
-            BridgeMethod::UiNavigate => Self::UiNavigate(read(params)?),
-            BridgeMethod::UiClose => Self::UiClose(read(params)?),
-            BridgeMethod::UiSetTitle => Self::UiSetTitle(read(params)?),
-            BridgeMethod::UiToast => Self::UiToast(read(params)?),
-            BridgeMethod::UiConfirm => Self::UiConfirm(read(params)?),
-            BridgeMethod::UiResize => Self::UiResize(read(params)?),
-            BridgeMethod::UiOpenExternal => Self::UiOpenExternal(read(params)?),
-            BridgeMethod::UiSaveState => Self::UiSaveState(read(params)?),
-            BridgeMethod::HostCapability => Self::HostCapability(read(params)?),
-            BridgeMethod::PeopleResolve => Self::PeopleResolve(read(params)?),
-            BridgeMethod::MediaRead => Self::MediaRead(read(params)?),
-            BridgeMethod::StorageGet => Self::StorageGet(read(params)?),
-            BridgeMethod::StorageSet => Self::StorageSet(read(params)?),
-            BridgeMethod::StorageRemove => Self::StorageRemove(read(params)?),
-            BridgeMethod::StorageKeys => Self::StorageKeys(read(params)?),
-            BridgeMethod::ClipboardWrite => Self::ClipboardWrite(read(params)?),
-            BridgeMethod::EventsSubscribe => Self::EventsSubscribe(read(params)?),
-            BridgeMethod::DiagLog => Self::DiagLog(read(params)?),
-        };
+        let request = Self::read(method, params).ok_or(BridgeErrorCode::InvalidParams)?;
         request.validate()?;
         Ok(request)
+    }
+
+    /// The parameters of `method` as their derived `Deserialize` reads them.
+    fn read(method: BridgeMethod, params: Value) -> Option<Self> {
+        use BridgeMethod as M;
+        let known: &[&str] = match method {
+            M::HostHello => &["sdk"],
+            M::PluginQuery => &["operation", "input"],
+            M::PluginCommand => &["operation", "input", "commandId"],
+            M::UiNavigate => &["page", "arguments", "bundleRoute"],
+            M::UiClose => &["result"],
+            M::UiSetTitle => &["title"],
+            M::UiToast => &["message", "kind"],
+            M::UiConfirm => &["title", "message", "confirmLabel", "destructive"],
+            M::UiResize => &["height"],
+            M::UiOpenExternal => &["url"],
+            M::UiSaveState => &["state"],
+            M::HostCapability => &["name", "params"],
+            M::PeopleResolve => &["userIds"],
+            M::MediaRead => &["fileId"],
+            M::StorageGet | M::StorageRemove => &["key"],
+            M::StorageSet => &["key", "value"],
+            M::StorageKeys => &["prefix"],
+            M::ClipboardWrite => &["text"],
+            M::EventsSubscribe => &["topics"],
+            M::DiagLog => &["level", "message"],
+        };
+        let mut f = Fields::new(params, known)?;
+        Some(match method {
+            M::HostHello => Self::Hello(HelloParams {
+                sdk: f.opt_string("sdk")?,
+            }),
+            M::PluginQuery => Self::PluginQuery(PluginQueryParams {
+                operation: f.string("operation")?,
+                input: f.value_or("input", empty_object),
+            }),
+            M::PluginCommand => Self::PluginCommand(PluginCommandParams {
+                operation: f.string("operation")?,
+                input: f.value_or("input", empty_object),
+                command_id: f.opt_string("commandId")?,
+            }),
+            M::UiNavigate => Self::UiNavigate(UiNavigateParams {
+                page: f.opt_string("page")?,
+                arguments: f.opt_object("arguments")?,
+                bundle_route: f.opt_string("bundleRoute")?,
+            }),
+            M::UiClose => Self::UiClose(UiCloseParams {
+                result: f.optional("result"),
+            }),
+            M::UiSetTitle => Self::UiSetTitle(UiSetTitleParams {
+                title: f.string("title")?,
+            }),
+            M::UiToast => Self::UiToast(UiToastParams {
+                message: f.string("message")?,
+                kind: f.name_or("kind", UiToastKind::parse, UiToastKind::Info)?,
+            }),
+            M::UiConfirm => Self::UiConfirm(UiConfirmParams {
+                title: f.string("title")?,
+                message: f.opt_string("message")?,
+                confirm_label: f.opt_string("confirmLabel")?,
+                destructive: f.bool_or_false("destructive")?,
+            }),
+            M::UiResize => Self::UiResize(UiResizeParams {
+                height: f.u32("height")?,
+            }),
+            M::UiOpenExternal => Self::UiOpenExternal(UiOpenExternalParams {
+                url: f.string("url")?,
+            }),
+            M::UiSaveState => Self::UiSaveState(UiSaveStateParams {
+                state: f.value("state")?,
+            }),
+            M::HostCapability => Self::HostCapability(HostCapabilityParams {
+                name: f.name("name", NativeCapability::parse)?,
+                params: f.optional("params"),
+            }),
+            M::PeopleResolve => Self::PeopleResolve(PeopleResolveParams {
+                user_ids: f.strings("userIds")?,
+            }),
+            M::MediaRead => Self::MediaRead(MediaReadParams {
+                file_id: f.string("fileId")?,
+            }),
+            M::StorageGet => Self::StorageGet(StorageKeyParams {
+                key: f.string("key")?,
+            }),
+            M::StorageRemove => Self::StorageRemove(StorageKeyParams {
+                key: f.string("key")?,
+            }),
+            M::StorageSet => Self::StorageSet(StorageSetParams {
+                key: f.string("key")?,
+                value: f.value("value")?,
+            }),
+            M::StorageKeys => Self::StorageKeys(StorageKeysParams {
+                prefix: f.opt_string("prefix")?,
+            }),
+            M::ClipboardWrite => Self::ClipboardWrite(ClipboardWriteParams {
+                text: f.string("text")?,
+            }),
+            M::EventsSubscribe => Self::EventsSubscribe(EventsSubscribeParams {
+                topics: {
+                    let mut topics = BTreeSet::new();
+                    for topic in f.strings("topics")? {
+                        topics.insert(BridgeEvent::parse(&topic)?);
+                    }
+                    topics
+                },
+            }),
+            M::DiagLog => Self::DiagLog(DiagLogParams {
+                level: f.name("level", DiagLevel::parse)?,
+                message: f.string("message")?,
+            }),
+        })
     }
 
     pub fn method(&self) -> BridgeMethod {
@@ -1260,38 +1482,32 @@ impl BridgeGrant {
         plugin: &ClientPlugin,
         host_native: &BTreeSet<String>,
     ) -> Self {
-        let operations: BTreeSet<String> = bundle
-            .operations
-            .iter()
-            .filter(|operation| {
-                plugin.operations.contains(*operation)
-                    && !plugin.transient_operations.contains(*operation)
-            })
-            .cloned()
-            .collect();
-        let query_operations = operations
-            .iter()
-            .filter(|operation| plugin.query_operations.contains(*operation))
-            .cloned()
-            .collect();
-        Self {
-            permissions: bundle
-                .permissions
-                .intersection(&entry.permissions)
-                .copied()
-                .collect(),
-            operations,
-            query_operations,
-            capabilities: bundle
-                .capabilities
-                .iter()
-                .filter(|capability| {
-                    plugin.extensions.native_capabilities.contains(*capability)
-                        && host_native.contains(capability.name())
-                })
-                .copied()
-                .collect(),
+        // Inserted one by one: collecting a set sorts first, a copy of the
+        // sorting code for each element type.
+        let mut grant = Self::default();
+        for operation in &bundle.operations {
+            if plugin.operations.contains(operation)
+                && !plugin.transient_operations.contains(operation)
+            {
+                if plugin.query_operations.contains(operation) {
+                    grant.query_operations.insert(operation.clone());
+                }
+                grant.operations.insert(operation.clone());
+            }
         }
+        for permission in &bundle.permissions {
+            if entry.permissions.contains(permission) {
+                grant.permissions.insert(*permission);
+            }
+        }
+        for capability in &bundle.capabilities {
+            if plugin.extensions.native_capabilities.contains(capability)
+                && host_native.contains(capability.name())
+            {
+                grant.capabilities.insert(*capability);
+            }
+        }
+        grant
     }
 
     /// Step 5 of the check order: the method's permission, then the
