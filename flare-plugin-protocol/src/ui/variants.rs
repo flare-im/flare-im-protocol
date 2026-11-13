@@ -512,7 +512,10 @@ impl UiContribution {
     /// - else the first presentation ([`Self::expansions`]) whose written
     ///   and derived requirements, native capabilities included, the
     ///   descriptor satisfies, without the optional blocks the client does
-    ///   not know ([`Self::strip_for`]);
+    ///   not know ([`Self::strip_for`]); a presentation that opens a web
+    ///   bundle carries the next declarative presentation the descriptor
+    ///   satisfies as its runtime fallback
+    ///   ([`Self::adopt_declarative_fallback`]);
     /// - else, when every presentation needs a native capability the host
     ///   withholds ([`UiRequires::withheld_by_host`]), the unsupported
     ///   placeholder: no newer build would show it;
@@ -570,6 +573,11 @@ impl UiContribution {
                 continue;
             }
             contribution.strip_for(&descriptor.vocabulary());
+            if contribution.bundle.is_some()
+                && let Some(fallback) = self.declarative_fallback(index, descriptor)
+            {
+                contribution.adopt_declarative_fallback(fallback);
+            }
             return Selected::Variant {
                 contribution,
                 index,
@@ -579,6 +587,57 @@ impl UiContribution {
             Selected::Upgrade(self.upgrade_placeholder(floor))
         } else {
             Selected::Unsupported(self.unsupported_placeholder())
+        }
+    }
+
+    /// The first presentation after the one at `index` that opens no web
+    /// bundle and that `descriptor` satisfies, stripped for it: what a host
+    /// draws when the bundle of the selected presentation cannot run (no
+    /// mirror, a digest mismatch, no WebView, repeated crashes, a
+    /// withdrawal). `None` when no later declarative presentation fits.
+    fn declarative_fallback(
+        &self,
+        index: usize,
+        descriptor: &ClientUiDescriptor,
+    ) -> Option<UiContribution> {
+        self.expansions()
+            .into_iter()
+            .skip(index + 1)
+            .filter(|(contribution, _)| contribution.bundle.is_none())
+            .find_map(|(mut contribution, written)| {
+                let mut needs = contribution.derived_requires();
+                needs.union(&written);
+                needs.satisfied_by(descriptor).then(|| {
+                    contribution.strip_for(&descriptor.vocabulary());
+                    contribution
+                })
+            })
+    }
+
+    /// Take into this bundle presentation the declarative content of
+    /// `fallback` for what the bundle replaces, so the view a host reads
+    /// before it opens the bundle, and keeps as its fallback, is complete:
+    /// - a page: the page document and its source (the page is the bundle);
+    /// - a composer action: the form document (the form is the bundle);
+    /// - a card: the detail document, when this presentation has none (the
+    ///   card itself stays this presentation's; its detail is the bundle).
+    ///
+    /// Identity, `variant` and `bundle` stay this presentation's.
+    pub fn adopt_declarative_fallback(&mut self, fallback: UiContribution) {
+        match self.kind {
+            UiContributionKind::Page => {
+                self.schema = fallback.schema;
+                self.source = fallback.source;
+            }
+            UiContributionKind::ComposerAction => {
+                self.schema = fallback.schema;
+            }
+            UiContributionKind::MessageContent => {
+                if self.detail.is_none() {
+                    self.detail = fallback.detail;
+                }
+            }
+            _ => {}
         }
     }
 

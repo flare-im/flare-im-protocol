@@ -547,6 +547,62 @@ fn core_selects_a_bundle_variant_only_for_a_usable_bundle() {
     );
 }
 
+#[test]
+fn a_bundle_variant_carries_the_next_declarative_variant_as_its_fallback() {
+    let android = descriptor(ClientPlatform::Android, "play", "webview", 1);
+    let selected = dashboard()
+        .select_with_bundles(&android, &[decl()])
+        .into_contribution();
+    assert_eq!(selected.variant.as_deref(), Some("bundle"));
+    assert_eq!(
+        selected.bundle.as_ref().map(|b| b.id.as_str()),
+        Some("dashboard")
+    );
+    // The page a host reads first, and draws when the bundle cannot run, is
+    // the `basic` variant's: its document and its source.
+    assert_eq!(selected.schema.fields.len(), 1);
+    assert_eq!(selected.schema.fields[0].path, "/open");
+    assert_eq!(
+        selected.source.as_ref().map(|s| s.operation.as_str()),
+        Some("example.poll.dash")
+    );
+    // The same as the declarative selection sends a client without bundles.
+    let mut off = android.clone();
+    off.bundle = None;
+    let declarative = dashboard()
+        .select_with_bundles(&off, &[decl()])
+        .into_contribution();
+    assert_eq!(declarative.schema, selected.schema);
+    assert_eq!(declarative.source, selected.source);
+}
+
+#[test]
+fn the_fallback_is_the_first_later_variant_the_client_satisfies() {
+    let mut page = dashboard();
+    // `charts` needs a block kind this client does not know; `basic` follows.
+    let charts: flare_plugin_protocol::ui::UiContributionVariant = serde_json::from_value(json!({
+        "id": "charts",
+        "requires": {"blocks": ["chart"]},
+        "schema": {"title": "Dashboard", "blocks": [
+            {"kind": "chart", "required": true, "chartKind": "bar", "seriesPath": "/s",
+             "labelPath": "/l", "valuePath": "/v"}]},
+        "source": {"operation": "example.poll.dash"}
+    }))
+    .unwrap();
+    page.variants.insert(1, charts);
+    let mut v1 = descriptor(ClientPlatform::Android, "play", "webview", 1);
+    v1.blocks.remove("chart");
+    let selected = page.select_with_bundles(&v1, &[decl()]).into_contribution();
+    assert_eq!(selected.variant.as_deref(), Some("bundle"));
+    assert!(selected.schema.blocks.is_empty());
+    assert_eq!(selected.schema.fields[0].path, "/open");
+    // A client that knows charts gets the `charts` document as the fallback.
+    let v2 = descriptor(ClientPlatform::Android, "play", "webview", 1);
+    let selected = page.select_with_bundles(&v2, &[decl()]).into_contribution();
+    assert_eq!(selected.variant.as_deref(), Some("bundle"));
+    assert_eq!(selected.schema.blocks.len(), 1);
+}
+
 // ---- bridge ----
 
 fn request(raw: Value) -> Vec<u8> {
