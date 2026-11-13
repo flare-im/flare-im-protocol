@@ -632,10 +632,8 @@ impl UiContribution {
             UiContributionKind::ComposerAction => {
                 self.schema = fallback.schema;
             }
-            UiContributionKind::MessageContent => {
-                if self.detail.is_none() {
-                    self.detail = fallback.detail;
-                }
+            UiContributionKind::MessageContent if self.detail.is_none() => {
+                self.detail = fallback.detail;
             }
             _ => {}
         }
