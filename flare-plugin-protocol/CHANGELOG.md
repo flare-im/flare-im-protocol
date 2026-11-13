@@ -13,6 +13,9 @@
   特性 `bundle-archive` 下：`check_archive`（平台回读）、`unpack_archive`（客户端缓存）、`write_archive`（CLI 打包）。
 - `bridge`：`BRIDGE_VERSION = 1`、`BridgeEnvelope`、`BridgeMethod`、`BridgeRequest` 与各方法参数结果、事件与载荷、
   固定错误码 `BridgeErrorCode`、`BRIDGE_PERMISSIONS`、`BridgeGrant`（`bundle.json` ∩ 租户批准 ∩ 目录授权）。
+- `runtime`：投影里每个插件带 `webBundles`（`ProjectedWebBundle`：`id`、`sha256`、本应用镜像 `urls`、解包副本 `files`、
+  本应用批准的桥权限 `permissions`），校验数量、地址与摘要；`ResolvedPlugin.web_bundles` 是 Core 解析后可下发的目录形态，
+  经 `with_web_bundles` 设置，必须与 Manifest 声明一致。
 - `UiContribution::select_with_bundles`：只选可用的包、按声明的桥版本比对、数字商品不选给受 App Store 规则约束的客户端。
 - Manifest 校验：变体打开的包必须声明，声明的包必须被某个变体打开，至多 8 个。
 - 生成器 `plugin-bridge-schema` 写出 `plugin_web_bundle.schema.json` 与 `plugin_bridge.schema.json`。
