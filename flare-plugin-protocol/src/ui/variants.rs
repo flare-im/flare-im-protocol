@@ -53,7 +53,9 @@ pub struct UiBundleRef {
     /// or `..` segment past the root, at most 256 bytes.
     pub route: String,
 }
-fn valid_bundle_id(id: &str) -> bool {
+/// A web bundle id: `[a-z0-9][a-z0-9-]{0,63}` ([`UiBundleRef::id`],
+/// [`crate::bundle::WebBundleDecl::id`]).
+pub fn valid_bundle_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id
@@ -66,18 +68,23 @@ fn valid_bundle_id(id: &str) -> bool {
 }
 impl UiBundleRef {
     pub fn is_valid(&self) -> bool {
-        valid_bundle_id(&self.id)
-            && self.route.len() <= MAX_UI_BUNDLE_ROUTE_BYTES
-            && self.route.starts_with('/')
-            && self
-                .route
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"/_.-".contains(&b))
-            && (self.route == "/"
-                || self.route[1..]
-                    .split('/')
-                    .all(|segment| !segment.is_empty() && segment != "." && segment != ".."))
+        valid_bundle_id(&self.id) && valid_bundle_route(&self.route)
     }
+}
+
+/// A route inside a web bundle ([`UiBundleRef::route`]): `/`-rooted,
+/// `[A-Za-z0-9/_.-]`, no empty, `.` or `..` segment past the root, at most
+/// [`MAX_UI_BUNDLE_ROUTE_BYTES`].
+pub fn valid_bundle_route(route: &str) -> bool {
+    route.len() <= MAX_UI_BUNDLE_ROUTE_BYTES
+        && route.starts_with('/')
+        && route
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/_.-".contains(&b))
+        && (route == "/"
+            || route[1..]
+                .split('/')
+                .all(|segment| !segment.is_empty() && segment != "." && segment != ".."))
 }
 
 /// A variant's need of a web bundle runtime: the bundle it opens and the
@@ -232,6 +239,18 @@ impl UiRequires {
         }
         missing
     }
+}
+
+/// Whether a client is under App Store rules for digital goods: an iOS
+/// client, a client distributed through `appstore`, or a host whose web
+/// engine is `wkwebview` (Flutter and Tauri on Apple platforms).
+pub fn under_app_store_rules(descriptor: &ClientUiDescriptor) -> bool {
+    descriptor.platform == crate::manifest::ClientPlatform::Ios
+        || descriptor.distribution == "appstore"
+        || descriptor
+            .bundle
+            .as_ref()
+            .is_some_and(|runtime| runtime.engine == "wkwebview")
 }
 
 /// One presentation of a contribution (see the module documentation).
@@ -499,6 +518,30 @@ impl UiContribution {
     ///   placeholder: no newer build would show it;
     /// - else an upgrade placeholder with the platform's `minClient`, if any.
     pub fn select(&self, descriptor: &ClientUiDescriptor) -> Selected {
+        self.select_where(descriptor, None)
+    }
+
+    /// [`Self::select`] for a plugin version whose usable web bundles are
+    /// `bundles`: the declarations Core holds for the version, without the
+    /// bundles not approved or withdrawn. A variant whose bundle is not
+    /// among them is skipped; one whose bundle sells digital goods
+    /// ([`crate::bundle::WebBundleDecl::digital_goods`]) is skipped for a
+    /// client under App Store rules ([`under_app_store_rules`]); neither
+    /// asks for an upgrade. A variant needs at least its declaration's
+    /// bridge. What Core calls once a version declares web bundles.
+    pub fn select_with_bundles(
+        &self,
+        descriptor: &ClientUiDescriptor,
+        bundles: &[crate::bundle::WebBundleDecl],
+    ) -> Selected {
+        self.select_where(descriptor, Some(bundles))
+    }
+
+    fn select_where(
+        &self,
+        descriptor: &ClientUiDescriptor,
+        bundles: Option<&[crate::bundle::WebBundleDecl]>,
+    ) -> Selected {
         let floor = self.min_client.get(&descriptor.platform).copied();
         if floor.is_some_and(|floor| descriptor.app_build < floor) {
             return Selected::Upgrade(self.upgrade_placeholder(floor));
@@ -507,6 +550,21 @@ impl UiContribution {
         for (index, (mut contribution, written)) in self.expansions().into_iter().enumerate() {
             let mut needs = contribution.derived_requires();
             needs.union(&written);
+            if let (Some(bundles), Some(reference)) = (bundles, &contribution.bundle) {
+                let Some(decl) = bundles.iter().find(|decl| decl.id == reference.id) else {
+                    continue;
+                };
+                if decl.digital_goods && under_app_store_rules(descriptor) {
+                    continue;
+                }
+                needs.union(&UiRequires {
+                    bundle: Some(UiRequiresBundle {
+                        id: decl.id.clone(),
+                        bridge: decl.bridge,
+                    }),
+                    ..UiRequires::default()
+                });
+            }
             if !needs.satisfied_by(descriptor) {
                 updatable |= !needs.withheld_by_host(descriptor);
                 continue;

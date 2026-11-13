@@ -661,6 +661,8 @@ fn manifest_value() -> Value {
         .as_array_mut()
         .unwrap()
         .push(page);
+    manifest["clientExtensions"]["webBundles"] =
+        json!([{"id": "dashboard", "sha256": "ab".repeat(32), "size": 4096, "bridge": 1}]);
     manifest
 }
 fn parse(manifest: &Value) -> Result<PluginManifest, flare_plugin_protocol::ProtocolError> {

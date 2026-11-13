@@ -7,6 +7,12 @@ license = "Apache-2.0"
 description = "Business-neutral Flare plugin manifests, registry, grants and lifecycle contracts"
 repository = "https://github.com/flare-im/flare-protocol"
 
+[features]
+# Reading and writing web bundle archives (`bundle::check_archive`,
+# `unpack_archive`, `write_archive`): the platform, the CLI and native
+# engines; the browser engine reads unpacked files and leaves it off.
+bundle-archive = []
+
 [dependencies]
 base64 = "0.22"
 ed25519-dalek = "2"

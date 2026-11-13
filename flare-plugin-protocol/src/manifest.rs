@@ -294,6 +294,21 @@ pub struct ClientExtensions {
     pub contributions: Vec<UiContribution>,
     #[serde(default)]
     pub native_capabilities: Vec<crate::ui::NativeCapability>,
+    /// Web bundles (L3) of this version, at most
+    /// [`crate::bundle::MAX_WEB_BUNDLES`]: the manifest signs each one's
+    /// digest (D-08). In the client catalog Core lists only the bundles a
+    /// selected variant opens, with their addresses and approved bridge
+    /// permissions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = crate::bundle::MAX_WEB_BUNDLES))]
+    pub web_bundles: Vec<crate::bundle::WebBundleDecl>,
+}
+
+impl ClientExtensions {
+    /// The web bundle declared with `id`.
+    pub fn web_bundle(&self, id: &str) -> Option<&crate::bundle::WebBundleDecl> {
+        self.web_bundles.iter().find(|bundle| bundle.id == id)
+    }
 }
 
 #[derive(
@@ -964,6 +979,7 @@ impl PluginManifest {
             "clientExtensions.contributions",
             "too many contributions",
         )?;
+        self.validate_web_bundles()?;
         if let Some(admin) = &self.admin {
             admin.validate(self)?;
             for page in &admin.pages {
@@ -980,6 +996,61 @@ impl PluginManifest {
         }
         self.validate_features()?;
         self.validate_assets()
+    }
+
+    /// The web bundle declarations: at most
+    /// [`crate::bundle::MAX_WEB_BUNDLES`], unique ids, each valid
+    /// ([`crate::bundle::WebBundleDecl::validate_declared`]); every bundle a
+    /// variant opens or requires is declared, and every declared bundle is
+    /// opened by some variant.
+    fn validate_web_bundles(&self) -> Result<()> {
+        let bundles = &self.client_extensions.web_bundles;
+        ensure(
+            bundles.len() <= crate::bundle::MAX_WEB_BUNDLES,
+            "clientExtensions.webBundles",
+            "too many web bundles",
+        )?;
+        let mut ids = BTreeSet::new();
+        for bundle in bundles {
+            if let Err(error) = bundle.validate_declared() {
+                return Err(ProtocolError::InvalidManifest {
+                    field: "clientExtensions.webBundles".to_owned(),
+                    reason: error.to_string(),
+                });
+            }
+            ensure(
+                ids.insert(bundle.id.as_str()),
+                "clientExtensions.webBundles.id",
+                "duplicate web bundle",
+            )?;
+        }
+        let mut opened = BTreeSet::new();
+        for variant in self
+            .client_extensions
+            .contributions
+            .iter()
+            .flat_map(|contribution| &contribution.variants)
+        {
+            let referenced = variant
+                .bundle
+                .as_ref()
+                .map(|bundle| bundle.id.as_str())
+                .into_iter()
+                .chain(variant.requires.bundle.as_ref().map(|b| b.id.as_str()));
+            for id in referenced {
+                ensure(
+                    ids.contains(id),
+                    "clientExtensions.contributions.variants.bundle",
+                    "web bundle is not declared in clientExtensions.webBundles",
+                )?;
+                opened.insert(id);
+            }
+        }
+        ensure(
+            opened.len() == ids.len(),
+            "clientExtensions.webBundles",
+            "a declared web bundle is opened by no variant",
+        )
     }
 
     /// What a publisher may declare as a feature: unique ids, bounded texts,

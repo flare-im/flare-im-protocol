@@ -1652,6 +1652,13 @@ pub fn composer_data(configuration: &Map<String, Value>) -> Value {
     Value::Object(data)
 }
 impl ClientPlugin {
+    /// The catalog entry of the web bundle `id`
+    /// ([`ClientExtensions::web_bundles`]: listed only when a selected
+    /// variant opens it, with `urls`, `files` and the approved bridge
+    /// `permissions`).
+    pub fn web_bundle(&self, id: &str) -> Option<&crate::bundle::WebBundleDecl> {
+        self.extensions.web_bundle(id)
+    }
     /// [`composer_data`] of this plugin's configuration.
     pub fn composer_data(&self) -> Value {
         composer_data(&self.configuration)

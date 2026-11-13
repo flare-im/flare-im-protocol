@@ -5,6 +5,18 @@
 
 ## 未发布
 
+### Web 包（L3）
+
+- `bundle`：`WebBundleDecl`（Manifest `clientExtensions.webBundles`，`id`、`sha256`（小写十六进制、无前缀）、`size`、
+  `bridge`、`digitalGoods`；目录另带 `urls`、`files`、已批准的桥权限 `permissions`）；`BundleManifest`（`bundle.json`）
+  与 `validate_for`；路径与类型白名单、D-05 上限；入口 HTML 静态规则 `check_entry_html`；脚本扫描 `scan_script`。
+  特性 `bundle-archive` 下：`check_archive`（平台回读）、`unpack_archive`（客户端缓存）、`write_archive`（CLI 打包）。
+- `bridge`：`BRIDGE_VERSION = 1`、`BridgeEnvelope`、`BridgeMethod`、`BridgeRequest` 与各方法参数结果、事件与载荷、
+  固定错误码 `BridgeErrorCode`、`BRIDGE_PERMISSIONS`、`BridgeGrant`（`bundle.json` ∩ 租户批准 ∩ 目录授权）。
+- `UiContribution::select_with_bundles`：只选可用的包、按声明的桥版本比对、数字商品不选给受 App Store 规则约束的客户端。
+- Manifest 校验：变体打开的包必须声明，声明的包必须被某个变体打开，至多 8 个。
+- 生成器 `plugin-bridge-schema` 写出 `plugin_web_bundle.schema.json` 与 `plugin_bridge.schema.json`。
+
 ### 客户端读取
 
 - `json::from_value`：客户端读 JSON 值的唯一入口，与 `serde_json::from_value` 一致，只是结构体只从对象读，

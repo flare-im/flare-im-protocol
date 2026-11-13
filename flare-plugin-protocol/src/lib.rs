@@ -3,6 +3,8 @@
 
 pub mod admin;
 pub mod authorization;
+pub mod bridge;
+pub mod bundle;
 pub mod command;
 pub mod configuration;
 pub mod data;

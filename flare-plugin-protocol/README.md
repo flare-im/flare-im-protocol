@@ -62,6 +62,8 @@ The host bridge reads are `im.conversation.read`, `im.conversation.participants.
 cargo test
 cargo run --bin plugin-manifest -- path/to/plugin.json
 cargo run --bin plugin-schema -- ../../flare-plugin-devkit/schema/platform_plugin_manifest.schema.json
+cargo run --features bundle-archive --bin plugin-bridge-schema -- ../../flare-plugin-devkit/schema
+cargo test --features bundle-archive
 ```
 
 Client composition-time SDK package manifests remain a separate generated contract. Platform control persists signed originals and immutable digests; deployed services and tenant grants reference those versions. Marketplace queries do not belong in the runtime call path.
