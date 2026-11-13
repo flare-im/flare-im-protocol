@@ -8,7 +8,10 @@ use flare_plugin_protocol::{
     bridge::*,
     bundle::*,
     manifest::{ClientPlatform, UiContribution},
-    ui::{BundleRuntime, ClientPlugin, ClientUiDescriptor, NativeCapability, engine_vocabulary},
+    ui::{
+        BundleRuntime, ClientPlugin, ClientUiDescriptor, NativeCapability, engine_vocabulary,
+        under_app_store_rules,
+    },
 };
 use serde_json::{Value, json};
 

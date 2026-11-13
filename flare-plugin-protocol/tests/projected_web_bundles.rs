@@ -78,7 +78,8 @@ fn a_projection_with_valid_bundles_validates() {
 
 #[test]
 fn invalid_projected_bundles_refuse_the_projection() {
-    let cases: Vec<(&str, Box<dyn Fn(&mut ProjectedWebBundle)>)> = vec![
+    type Breaker = Box<dyn Fn(&mut ProjectedWebBundle)>;
+    let cases: Vec<(&str, Breaker)> = vec![
         ("id", Box::new(|b| b.id = "Board".into())),
         ("digest", Box::new(|b| b.sha256 = "sha256:ab".into())),
         ("no urls", Box::new(|b| b.urls.clear())),

@@ -736,12 +736,12 @@ fn is_relative_url(value: &str) -> bool {
 /// What the reviewer is told about a script: `eval(`, `new Function(` and
 /// `import(` of an absolute or protocol-relative address, each once.
 pub fn scan_script(text: &str) -> Vec<BundleWarningCode> {
-    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let compact = compact_script(text);
     let mut found = BTreeSet::new();
     if calls(&compact, "eval(") {
         found.insert(BundleWarningCode::Eval);
     }
-    if calls(&compact, "newFunction(") {
+    if calls(&compact, "new Function(") {
         found.insert(BundleWarningCode::NewFunction);
     }
     for quote in ['"', '\'', '`'] {
@@ -752,6 +752,27 @@ pub fn scan_script(text: &str) -> Vec<BundleWarningCode> {
         }
     }
     found.into_iter().collect()
+}
+
+/// The script with whitespace dropped, except one space where it separates
+/// two identifier characters: `await import (` stays two words (`await
+/// import(`) and `new Function (` reads `new Function(`.
+fn compact_script(text: &str) -> String {
+    let identifier = |c: char| c.is_alphanumeric() || matches!(c, '_' | '$');
+    let mut compact = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && identifier(c) && compact.chars().next_back().is_some_and(identifier) {
+            compact.push(' ');
+        }
+        pending_space = false;
+        compact.push(c);
+    }
+    compact
 }
 
 /// Whether `needle` occurs in `text` not as the tail of a longer identifier
