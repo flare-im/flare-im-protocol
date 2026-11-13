@@ -342,6 +342,7 @@ fn composer_catalog(configuration: Value) -> UiCatalog {
             extensions: manifest.client_extensions,
         }],
         unavailable: vec![],
+        payment_provider: None,
     }
 }
 fn composer_view(catalog: &UiCatalog, payload: Value) -> ResolvedPluginView {
@@ -924,6 +925,7 @@ fn paged_detail_resolves_through_the_catalog_and_pages_admin_rows() {
             configuration: Default::default(),
         }],
         unavailable: vec![],
+        payment_provider: None,
     };
     let message = PluginMessage {
         plugin_id: "example.poll".into(),

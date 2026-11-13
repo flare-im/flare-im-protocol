@@ -1322,6 +1322,7 @@ fn catalog(platforms: Value, unavailable: Value) -> UiCatalog {
             configuration: Default::default(),
         }],
         unavailable: serde_json::from_value(unavailable).unwrap(),
+        payment_provider: None,
     }
 }
 fn context(tenant: &str, now_ms: i64) -> UiRenderContext<'_> {

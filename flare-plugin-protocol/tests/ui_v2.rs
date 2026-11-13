@@ -36,6 +36,7 @@ fn catalog() -> UiCatalog {
             configuration: Default::default(),
         }],
         unavailable: vec![],
+        payment_provider: None,
     }
 }
 fn context<'a>(locale: &'a str, viewer: &'a str) -> UiRenderContext<'a> {

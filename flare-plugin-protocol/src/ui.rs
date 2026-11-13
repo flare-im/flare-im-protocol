@@ -945,11 +945,13 @@ impl RtcSessionParams {
 /// confirmation ([`PaymentConfirmationOrder::from_result`]).
 pub const PAYMENT_CONFIRMATION_KEY: &str = "confirmation";
 /// What a plugin command returns to have the host confirm a payment
-/// (`data.confirmation`). The host draws the confirmation itself from these
-/// fields only, verifies the viewer, and calls `operation` (a transient
-/// operation of the same plugin, listed in
-/// [`ClientPlugin::transient_operations`]) with the confirmation proof and
-/// `orderId`.
+/// (`data.confirmation`). The engine records the order from that result, as
+/// it came back through Core; a host or a bundle names it by `orderId` only.
+/// The host draws the confirmation itself from the recorded fields only and
+/// collects the viewer's credential, which goes to the
+/// [`UiPaymentProvider`]; `operation` (a transient operation of the same
+/// plugin, listed in [`ClientPlugin::transient_operations`]) then receives
+/// `{orderId, ticket}`, never the credential.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PaymentConfirmationOrder {
@@ -1694,6 +1696,66 @@ pub struct UiCatalog {
     /// nothing. A plugin in neither list resolves as `not_installed`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<UiUnavailablePlugin>,
+    /// Who checks the payment credential a host's payment confirmation
+    /// collects ([`UiPaymentProvider`]); `None` when this deployment names
+    /// none or the viewer cannot reach it, and then no order is confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_provider: Option<UiPaymentProvider>,
+}
+/// The plugin a deployment names (Core configuration, never a manifest) to
+/// hold its users' payment credentials, and the transient operation of it
+/// that checks one.
+///
+/// A host's payment confirmation never hands the credential to the plugin
+/// that asked for the payment. The engine sends it, with the order exactly as
+/// the engine recorded it from that plugin's operation result, to
+/// `operation`: [`PaymentTicketRequest`] in, [`PaymentTicket`] out. The
+/// provider answers with a one-time ticket bound to the order, the viewer and
+/// the asking plugin, and only that ticket reaches the order's own transient
+/// operation (`{orderId, ticket}`). The asking plugin's server redeems the
+/// ticket with the provider before it treats the order as paid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiPaymentProvider {
+    pub plugin_id: String,
+    /// One of the provider's [`ClientPlugin::transient_operations`].
+    pub operation: String,
+}
+/// What the engine sends [`UiPaymentProvider::operation`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentTicketRequest {
+    /// The plugin whose operation returned the order.
+    pub plugin_id: String,
+    pub order_id: String,
+    pub amount: String,
+    pub currency: String,
+    pub payee: String,
+    pub expires_at_ms: i64,
+    /// The host's proof, as the confirmation sheet collected it (at most
+    /// 4 KiB serialized).
+    pub confirmation: Map<String, Value>,
+}
+/// The provider's answer: a ticket the order's transient operation receives
+/// as `ticket`, valid once and until `expires_at_ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentTicket {
+    /// Opaque, `1..=`[`MAX_PAYMENT_TICKET_BYTES`] bytes of `[A-Za-z0-9_-]`.
+    pub ticket: String,
+    pub expires_at_ms: i64,
+}
+/// Longest [`PaymentTicket::ticket`].
+pub const MAX_PAYMENT_TICKET_BYTES: usize = 256;
+impl PaymentTicket {
+    /// Whether the ticket reads as one.
+    pub fn is_valid(ticket: &str) -> bool {
+        !ticket.is_empty()
+            && ticket.len() <= MAX_PAYMENT_TICKET_BYTES
+            && ticket
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
 }
 /// A plugin listed in [`UiCatalog::unavailable`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

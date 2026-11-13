@@ -23,6 +23,7 @@ fn catalog() -> UiCatalog {
             configuration: Default::default(),
         }],
         unavailable: vec![],
+        payment_provider: None,
     }
 }
 #[test]

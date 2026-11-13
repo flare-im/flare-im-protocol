@@ -276,6 +276,7 @@ fn catalog(manifest: &PluginManifest) -> UiCatalog {
             configuration: Default::default(),
         }],
         unavailable: vec![],
+        payment_provider: None,
     }
 }
 fn context() -> UiRenderContext<'static> {
