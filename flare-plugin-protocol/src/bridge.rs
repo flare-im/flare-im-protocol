@@ -913,7 +913,9 @@ pub struct MediaReadParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MediaReadResult {
-    /// A `blob:` address.
+    /// The file as a `data:` address from the host, at most 4 MiB (the
+    /// bundle file limit); the plugin web SDK hands the bundle a `blob:`
+    /// address made from it.
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,

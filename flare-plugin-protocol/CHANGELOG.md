@@ -19,6 +19,7 @@
 - `UiContribution::select_with_bundles`：只选可用的包、按声明的桥版本比对、数字商品不选给受 App Store 规则约束的客户端。
 - Manifest 校验：变体打开的包必须声明，声明的包必须被某个变体打开，至多 8 个。
 - 生成器 `plugin-bridge-schema` 写出 `plugin_web_bundle.schema.json` 与 `plugin_bridge.schema.json`。
+- `MediaReadResult.url` 是宿主给的 `data:` 地址（≤4 MiB），插件 Web SDK 转成 `blob:` 地址交给包。
 
 ### 客户端读取
 
