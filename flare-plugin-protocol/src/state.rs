@@ -128,7 +128,7 @@ impl SharedState {
         if values_json.len() > MAX_SHARED_STATE_BYTES {
             return Err(ProtocolError::Denied("invalid plugin shared state"));
         }
-        let values: Map<String, Value> = serde_json::from_str(values_json)
+        let values: Map<String, Value> = serde_json::from_slice(values_json.as_bytes())
             .map_err(|_| ProtocolError::Denied("invalid plugin shared state"))?;
         let state = Self {
             entity: entity.to_owned(),
