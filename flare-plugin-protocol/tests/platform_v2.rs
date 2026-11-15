@@ -678,7 +678,7 @@ fn a_page_continuing_the_last_group_drops_its_header_and_numbers_on() {
         voter(1, "烧烤", 4, "u4"),
         voter(1, "烧烤", 4, "u5"),
     ]));
-    view.append_page(page);
+    append_both(&mut view, page);
     let block = entries(&view);
     let rows: Vec<_> = block
         .items
@@ -702,7 +702,10 @@ fn a_page_continuing_the_last_group_drops_its_header_and_numbers_on() {
     );
     // A page that starts a new group keeps its header and numbering.
     let mut view = grouped_detail(json!([voter(0, "火锅", 1, "u1")]));
-    view.append_page(grouped_detail(json!([voter(1, "烧烤", 1, "u2")])));
+    append_both(
+        &mut view,
+        grouped_detail(json!([voter(1, "烧烤", 1, "u2")])),
+    );
     let rows: Vec<_> = entries(&view)
         .items
         .iter()
@@ -1319,6 +1322,7 @@ fn catalog(platforms: Value, unavailable: Value) -> UiCatalog {
             configuration: Default::default(),
         }],
         unavailable: serde_json::from_value(unavailable).unwrap(),
+        payment_provider: None,
     }
 }
 fn context(tenant: &str, now_ms: i64) -> UiRenderContext<'_> {
@@ -1447,4 +1451,27 @@ fn a_read_only_copy_keeps_its_content_and_drops_everything_interactive() {
     // An inert view stays as it is.
     let inert = ResolvedPluginView::unavailable(&message(None), UiUnavailableReason::Disabled);
     assert_eq!(inert.clone().into_read_only(), inert);
+}
+
+/// Append `page` to `view`, and check that the shown-view append a client
+/// runs on the JSON a host passed back gives the same view.
+fn append_both(
+    view: &mut flare_plugin_protocol::ui::ResolvedPluginView,
+    page: flare_plugin_protocol::ui::ResolvedPluginView,
+) {
+    use flare_plugin_protocol::ui::{ResolvedUiBlock, ShownPluginView};
+    let mut shown = ShownPluginView::from_value(serde_json::to_value(&*view).unwrap()).unwrap();
+    let (entries, rows) = view
+        .blocks
+        .iter()
+        .fold((0, 0), |(e, r), block| match block {
+            ResolvedUiBlock::Entries(block) => (e + block.items.len(), r),
+            ResolvedUiBlock::Rows(block) => (e, r + block.rows.len()),
+            _ => (e, r),
+        });
+    assert_eq!((shown.entries(), shown.rows()), (entries, rows));
+    assert_eq!(shown.next_cursor(), view.next_cursor.as_deref());
+    shown.append_page(page.clone());
+    view.append_page(page);
+    assert_eq!(shown.into_value(), serde_json::to_value(&*view).unwrap());
 }

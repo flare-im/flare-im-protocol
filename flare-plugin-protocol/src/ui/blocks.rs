@@ -29,9 +29,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Options of a choices block.
 pub const MAX_UI_CHOICE_OPTIONS: usize = 50;
-/// Entries shown by an entries block (`limit` default and cap).
+/// Entries shown by an entries block (`limit` default and cap). The cap
+/// covers a whole list of a hundred, such as every claim of a red packet.
 pub const DEFAULT_UI_ENTRIES_LIMIT: u8 = 10;
-pub const MAX_UI_ENTRIES_LIMIT: u8 = 50;
+pub const MAX_UI_ENTRIES_LIMIT: u8 = 100;
 /// Groups of a people block, and avatars per group (`max` default and cap).
 pub const MAX_UI_PEOPLE_GROUPS: usize = 4;
 pub const DEFAULT_UI_PEOPLE_AVATARS: u8 = 5;
@@ -70,8 +71,32 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+/// Blocks of a section (`1..=8`); they count towards [`super::MAX_UI_BLOCKS`].
+pub const MAX_UI_SECTION_BLOCKS: usize = 8;
+/// Items of a stats block.
+pub const MIN_UI_STATS: usize = 2;
+pub const MAX_UI_STATS: usize = 6;
+/// Series of a chart (a donut draws one) and points per series.
+pub const MAX_UI_CHART_SERIES: usize = 3;
+pub const MAX_UI_CHART_POINTS: usize = 60;
+/// Image blocks of one document.
+pub const MAX_UI_IMAGES: usize = 4;
+/// Bytes of a QR code value.
+pub const MAX_UI_QR_VALUE_BYTES: usize = 512;
+/// Hero blocks of one document, and actions of a hero.
+pub const MAX_UI_HEROES: usize = 1;
+pub const MAX_UI_HERO_ACTIONS: usize = 3;
+/// Items of a steps block.
+pub const MIN_UI_STEPS: usize = 2;
+pub const MAX_UI_STEPS: usize = 6;
+/// Banner blocks of one document.
+pub const MAX_UI_BANNERS: usize = 2;
+/// Items resolved by a timeline block.
+pub const MAX_UI_TIMELINE_ITEMS: usize = 50;
+
 /// A display block, tagged by `kind`. Every kind may carry `hiddenWhen`
-/// conditions that leave it out of the resolved view.
+/// conditions that leave it out of the resolved view, and `required`
+/// ([`Self::is_required`]).
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UiBlock {
@@ -87,9 +112,19 @@ pub enum UiBlock {
     Note(UiNoteBlock),
     /// Page and admin page (`admin.pages`) documents only.
     Rows(UiRowsBlock),
-    /// Admin page (`admin.pages`) documents only.
+    /// Admin page (`admin.pages`) documents, and the main document of a page
+    /// whose read is an owner-scoped `query`.
     #[serde(rename = "protected-media")]
     ProtectedMedia(UiProtectedMediaBlock),
+    Section(UiSectionBlock),
+    Stats(UiStatsBlock),
+    Chart(UiChartBlock),
+    Image(UiImageBlock),
+    Qr(UiQrBlock),
+    Hero(UiHeroBlock),
+    Steps(UiStepsBlock),
+    Banner(UiBannerBlock),
+    Timeline(UiTimelineBlock),
 }
 kind_tagged! {
     UiBlock = "UiBlock" {
@@ -105,6 +140,15 @@ kind_tagged! {
         "note" => Note(UiNoteBlock),
         "rows" => Rows(UiRowsBlock),
         "protected-media" => ProtectedMedia(UiProtectedMediaBlock),
+        "section" => Section(UiSectionBlock),
+        "stats" => Stats(UiStatsBlock),
+        "chart" => Chart(UiChartBlock),
+        "image" => Image(UiImageBlock),
+        "qr" => Qr(UiQrBlock),
+        "hero" => Hero(UiHeroBlock),
+        "steps" => Steps(UiStepsBlock),
+        "banner" => Banner(UiBannerBlock),
+        "timeline" => Timeline(UiTimelineBlock),
     }
 }
 
@@ -147,6 +191,9 @@ pub struct UiTextBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// Label/value rows, with the same rules as the document's `fields`
@@ -158,6 +205,9 @@ pub struct UiFieldsBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// When a choices block shows counts.
@@ -230,6 +280,9 @@ pub struct UiChoicesBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 /// A declared option of a choices block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -285,7 +338,7 @@ pub struct UiEntriesBlock {
     pub user_ids_path: Option<String>,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub numbered: bool,
-    /// `1..=50`, default 10.
+    /// `1..=100`, default 10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u8>,
     /// Total number of entries when the data holds only the latest ones.
@@ -313,9 +366,16 @@ pub struct UiEntriesBlock {
     /// a label and a tone (a ledger line's kind).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_labels: Option<UiValueLabels>,
+    /// Inside an entry: when it happened (epoch milliseconds, integer or digit
+    /// string), shown beside it in the viewer's time zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_path: Option<String>,
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// Labels for an enumerated value inside each entry or row, shown as that
@@ -343,6 +403,9 @@ pub struct UiPeopleBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -373,6 +436,9 @@ pub struct UiStatusBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -393,6 +459,9 @@ pub struct UiProgressBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// An instant or a range in epoch milliseconds (integer or digit string). The
@@ -411,6 +480,9 @@ pub struct UiTimeBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -419,6 +491,9 @@ pub struct UiDividerBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// Secondary text (an anonymity notice). Exactly one of `text` and `path`, as
@@ -435,6 +510,9 @@ pub struct UiNoteBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -502,7 +580,8 @@ pub struct UiRowsBlock {
     pub actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty_text: Option<String>,
-    /// Ids of the document inputs that are filters (`0..=16`, unique). Absent:
+    /// Ids of the document inputs that are filters (unique, at most
+    /// [`super::MAX_UI_INPUTS`]). Absent:
     /// every input is a filter; `[]`: none is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<String>>,
@@ -512,10 +591,19 @@ pub struct UiRowsBlock {
     pub value_labels: Option<UiValueLabels>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub presentation: UiRowsPresentation,
+    /// Rows go under day headings (today, yesterday, a date) in the viewer's
+    /// time zone, by the first `time` column; consecutive rows of one day
+    /// share a heading, so the plugin sends them in time order. Requires a
+    /// `time` column.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub group_by_day: bool,
     /// Not shown when any condition matches (`0..=4`). Unlike the row
     /// actions' conditions these read the page (the source result), not a row.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// Private material a staff member reads one item at a time. Nothing about the
@@ -558,6 +646,310 @@ pub struct UiProtectedMediaBlock {
     /// Not shown when any condition (`0..=4`) matches the resolved data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+/// A group of blocks under an optional label, which a kit may let the viewer
+/// fold. One level only: a section holds `1..=8` blocks of any kind but
+/// `section`, `rows` and `protected-media`, and they count towards the
+/// document's 24 blocks. A section none of whose blocks resolves is not shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiSectionBlock {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub blocks: Vec<UiBlock>,
+    /// Shown folded at first (kits that cannot fold show it open).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+/// Key figures side by side (a balance, today's count). `2..=6` items; an
+/// item whose value is missing is not shown, and the block only when none is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiStatsBlock {
+    pub items: Vec<UiStatItem>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiStatItem {
+    pub label: String,
+    /// A scalar in the data.
+    pub value_path: String,
+    /// How the value reads, as for a field; its paths read the data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<UiFieldFormat>,
+    /// A scalar saying how the value moved (`+12%`, `-3`), shown beside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trend_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<UiTone>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiChartKind {
+    Bar,
+    Line,
+    /// One series, its points as slices.
+    Donut,
+}
+
+/// A small chart drawn by the kit from data, no chart code involved.
+///
+/// `seriesPath` reads an array. Without `pointsPath` the array is the points
+/// of one series. With `pointsPath` it is an array of series objects, each
+/// holding its points at `pointsPath` and its name at `seriesLabelPath`. At
+/// most 3 series (a donut draws the first only) of at most 60 points are
+/// resolved. Inside a point, `labelPath` reads its label and `valuePath` its
+/// value (a number, or a numeric string); a point without either is skipped.
+/// With no point at all the chart shows `emptyText`, or is not shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiChartBlock {
+    pub chart_kind: UiChartKind,
+    pub series_path: String,
+    /// Inside a series object: its points. Turns multiple series on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points_path: Option<String>,
+    /// Inside a series object: its name. Requires `pointsPath`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_label_path: Option<String>,
+    pub label_path: String,
+    pub value_path: String,
+    /// How a point value reads; its paths read the point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<UiFieldFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_text: Option<String>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+/// Where an image block takes its picture from: exactly one of the two.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiImageSource {
+    /// A file of the package's `assets/`, listed in the manifest's signed
+    /// `assets` table. No client can read package files yet (the engine keeps
+    /// no copy of the package), so `flare-plugin check` refuses it; use
+    /// `filePath` until clients serve package assets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    /// JSON pointer to a [`super::UiFileReference`] (`{fileId}`) in the
+    /// data: a file the plugin received through a private upload, which the
+    /// host reads through the plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum UiImageAspect {
+    #[serde(rename = "1:1")]
+    Square,
+    #[serde(rename = "4:3")]
+    Standard,
+    #[serde(rename = "16:9")]
+    Wide,
+    #[serde(rename = "3:4")]
+    Portrait,
+}
+/// One picture in a fixed frame. At most 4 per document. Never a URL: the
+/// source is a signed package asset or a privately uploaded file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiImageBlock {
+    pub source: UiImageSource,
+    pub aspect: UiImageAspect,
+    /// What the picture shows, for assistive technology (translated through
+    /// `texts`).
+    pub alt: String,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+/// A QR code the kit draws from the scalar at `valuePath` (at most 512
+/// bytes). With `refreshOperation`, a declared `query` of the plugin, the
+/// host offers to refresh the code: it calls the operation with an empty
+/// input and reads `valuePath` and `expiresAtPath` in its result. With
+/// `expiresAtPath` (epoch milliseconds) the kit marks the code expired once
+/// that instant passes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiQrBlock {
+    pub value_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_operation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_path: Option<String>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiHeroTone {
+    #[default]
+    Neutral,
+    Positive,
+    Warning,
+    Brand,
+}
+/// The head of a page: one large value (a balance, an amount received) with
+/// a label, a subtitle and up to 3 actions it owns. At most one per
+/// document. Exactly one of `amountPath` (the value is an amount: kits use
+/// tabular figures) and `valuePath`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiHeroBlock {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_path: Option<String>,
+    /// How the value reads, as for a field; its paths read the data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<UiFieldFormat>,
+    /// A scalar in the data shown under the value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_path: Option<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tone: UiHeroTone,
+    /// The viewer can hide the value (a balance on a shared screen): the kit
+    /// offers an eye toggle and draws the hidden value as dots. Starts shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub maskable: bool,
+    /// Ids of document actions (`0..=3`, unique) the block owns and shows as
+    /// its buttons; their `hiddenWhen` applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiStepState {
+    #[default]
+    Pending,
+    Current,
+    Done,
+    Failed,
+}
+/// A process in `2..=6` steps (submitted, in review, approved). Each step's
+/// state is the scalar at its `statePath`, one of `pending`, `current`,
+/// `done` and `failed`; any other value reads `pending`. The block is not
+/// shown when no step has a state in the data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiStepsBlock {
+    pub items: Vec<UiStep>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiStep {
+    pub label: String,
+    pub state_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiBannerTone {
+    Info,
+    Success,
+    Warning,
+    Danger,
+}
+/// A prominent message across the page (a rejection reason, a risk notice),
+/// with an optional action it owns. At most 2 per document. Exactly one of
+/// `text` and `path`, as for a text block.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiBannerBlock {
+    pub tone: UiBannerTone,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Id of a document action the block owns; its `hiddenWhen` applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+/// Dated items in data order (ledger lines, task activity), at most 50.
+/// Inside an item: `timePath` (epoch milliseconds, integer or digit string)
+/// and `titlePath` are required, or the item is skipped; `detailPath` adds a
+/// line; `statusPath` a badge mapped through `values` like a status block
+/// (an unmapped value is shown as sent, neutral).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiTimelineBlock {
+    pub items_path: String,
+    pub time_path: String,
+    pub title_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_path: Option<String>,
+    /// `0..=32` entries; keys `1..=64` bytes. Requires `statusPath`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, UiStatusValue>,
+    /// Shown when the list is present but empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_text: Option<String>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 // ---- resolved blocks ----
@@ -581,6 +973,15 @@ pub enum ResolvedUiBlock {
     Rows(ResolvedUiRows),
     #[serde(rename = "protected-media")]
     ProtectedMedia(ResolvedUiProtectedMedia),
+    Section(ResolvedUiSection),
+    Stats(ResolvedUiStats),
+    Chart(ResolvedUiChart),
+    Image(ResolvedUiImage),
+    Qr(ResolvedUiQr),
+    Hero(ResolvedUiHero),
+    Steps(ResolvedUiSteps),
+    Banner(ResolvedUiBanner),
+    Timeline(ResolvedUiTimeline),
 }
 kind_tagged! {
     ResolvedUiBlock = "ResolvedUiBlock" {
@@ -596,7 +997,173 @@ kind_tagged! {
         "note" => Note(ResolvedUiNote),
         "rows" => Rows(ResolvedUiRows),
         "protected-media" => ProtectedMedia(ResolvedUiProtectedMedia),
+        "section" => Section(ResolvedUiSection),
+        "stats" => Stats(ResolvedUiStats),
+        "chart" => Chart(ResolvedUiChart),
+        "image" => Image(ResolvedUiImage),
+        "qr" => Qr(ResolvedUiQr),
+        "hero" => Hero(ResolvedUiHero),
+        "steps" => Steps(ResolvedUiSteps),
+        "banner" => Banner(ResolvedUiBanner),
+        "timeline" => Timeline(ResolvedUiTimeline),
     }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiSection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub collapsed: bool,
+    /// The blocks that resolved, in order (at least one).
+    pub blocks: Vec<ResolvedUiBlock>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiStats {
+    pub items: Vec<ResolvedUiStat>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiStat {
+    pub label: String,
+    /// The plain text, whatever `format` says.
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<ResolvedUiFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trend: Option<ResolvedUiTrend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<UiTone>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiTrendDirection {
+    Up,
+    Down,
+    Flat,
+}
+/// How a figure moved: the text as sent and its direction (from the sign of
+/// a number, or a leading `+`/`-` of a text; `flat` otherwise).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiTrend {
+    pub text: String,
+    pub direction: UiTrendDirection,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiChart {
+    pub chart_kind: UiChartKind,
+    /// `0..=3` series (one for a donut), each with at least one point.
+    pub series: Vec<ResolvedUiChartSeries>,
+    /// Present when no series has a point: kits show it instead of a chart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_text: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiChartSeries {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub points: Vec<ResolvedUiChartPoint>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiChartPoint {
+    pub label: String,
+    /// The value drawn (finite).
+    pub value: f64,
+    /// The value as text, through the block's `format` when it fits.
+    pub text: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiImage {
+    /// A package asset path, or
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    /// the id of a privately uploaded file of the plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+    pub aspect: UiImageAspect,
+    pub alt: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiQr {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// The `query` that returns a fresh code; absent on a read-only copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_operation: Option<String>,
+    /// Where `refreshOperation`'s result holds the value and the expiry
+    /// (the block's own paths).
+    pub value_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<i64>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiHero {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The plain text, whatever `format` says.
+    pub value: String,
+    /// The value is an amount (`amountPath`).
+    pub amount: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<ResolvedUiFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    pub tone: UiHeroTone,
+    /// The viewer can hide the value ([`UiHeroBlock::maskable`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub maskable: bool,
+    /// The visible owned actions, resolved; empty on a read-only copy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<UiAction>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiSteps {
+    pub items: Vec<ResolvedUiStep>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiStep {
+    pub label: String,
+    pub state: UiStepState,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiBanner {
+    pub tone: UiBannerTone,
+    pub text: String,
+    /// The owned action while visible; absent on a read-only copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<UiAction>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiTimeline {
+    pub items: Vec<ResolvedUiTimelineItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_text: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiTimelineItem {
+    pub at_ms: i64,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<ResolvedUiBadge>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -680,6 +1247,9 @@ pub struct ResolvedUiEntry {
     /// The entry's badge, from the block's `valueLabels`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub badge: Option<ResolvedUiBadge>,
+    /// When it happened ([`UiEntriesBlock::time_path`]), epoch milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_ms: Option<i64>,
 }
 /// An item's enumerated value as words and a tone ([`UiValueLabels`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -807,6 +1377,10 @@ pub struct ResolvedUiRows {
     pub filters: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub presentation: UiRowsPresentation,
+    /// Group the rows under day headings by the first `time` column
+    /// ([`UiRowsBlock::group_by_day`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub group_by_day: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -917,6 +1491,10 @@ fn row_action<'a>(actions: &'a [UiAction], id: &str) -> Option<&'a UiAction> {
             )
     })
 }
+/// An action a hero or a banner may own: any target.
+fn any_action<'a>(actions: &'a [UiAction], id: &str) -> Option<&'a UiAction> {
+    actions.iter().find(|a| a.id == id)
+}
 fn text_or_path(text: &Option<String>, path: &Option<String>) -> bool {
     match (text, path) {
         (Some(text), None) => valid_long_text(text),
@@ -931,6 +1509,15 @@ pub(crate) fn valid_conditions(conditions: &[UiCondition]) -> bool {
 }
 
 impl UiBlock {
+    /// Whether a `hiddenWhen` condition matches `data` for `viewer`: the
+    /// block is not shown. Authoring tools use it to tell a block the data
+    /// hides from one the data does not feed.
+    pub fn is_hidden_by(&self, data: &Value, viewer: &str) -> bool {
+        self.hidden_when()
+            .iter()
+            .any(|condition| condition.matches(data, viewer))
+    }
+
     /// The block's display conditions: it is not shown when any of them
     /// matches the data the document is resolved against.
     pub fn hidden_when(&self) -> &[UiCondition] {
@@ -947,15 +1534,121 @@ impl UiBlock {
             Self::Note(b) => &b.hidden_when,
             Self::Rows(b) => &b.hidden_when,
             Self::ProtectedMedia(b) => &b.hidden_when,
+            Self::Section(b) => &b.hidden_when,
+            Self::Stats(b) => &b.hidden_when,
+            Self::Chart(b) => &b.hidden_when,
+            Self::Image(b) => &b.hidden_when,
+            Self::Qr(b) => &b.hidden_when,
+            Self::Hero(b) => &b.hidden_when,
+            Self::Steps(b) => &b.hidden_when,
+            Self::Banner(b) => &b.hidden_when,
+            Self::Timeline(b) => &b.hidden_when,
         }
     }
 
-    /// Action ids this block owns (they are not listed as card buttons).
+    /// `required`: whether a client may leave the block out when it cannot
+    /// read it (an unknown kind, or a known kind with a field it does not
+    /// know). A required block it cannot read makes the whole contribution
+    /// unreadable, shown as an upgrade prompt
+    /// ([`super::lenient::prepare_contribution`]). Default false.
+    pub fn is_required(&self) -> bool {
+        match self {
+            Self::Text(b) => b.required,
+            Self::Fields(b) => b.required,
+            Self::Choices(b) => b.required,
+            Self::Entries(b) => b.required,
+            Self::People(b) => b.required,
+            Self::Status(b) => b.required,
+            Self::Progress(b) => b.required,
+            Self::Time(b) => b.required,
+            Self::Divider(b) => b.required,
+            Self::Note(b) => b.required,
+            Self::Rows(b) => b.required,
+            Self::ProtectedMedia(b) => b.required,
+            Self::Section(b) => b.required,
+            Self::Stats(b) => b.required,
+            Self::Chart(b) => b.required,
+            Self::Image(b) => b.required,
+            Self::Qr(b) => b.required,
+            Self::Hero(b) => b.required,
+            Self::Steps(b) => b.required,
+            Self::Banner(b) => b.required,
+            Self::Timeline(b) => b.required,
+        }
+    }
+
+    /// The wire tag of this block (`text`, `protected-media`, ...).
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "text",
+            Self::Fields(_) => "fields",
+            Self::Choices(_) => "choices",
+            Self::Entries(_) => "entries",
+            Self::People(_) => "people",
+            Self::Status(_) => "status",
+            Self::Progress(_) => "progress",
+            Self::Time(_) => "time",
+            Self::Divider(_) => "divider",
+            Self::Note(_) => "note",
+            Self::Rows(_) => "rows",
+            Self::ProtectedMedia(_) => "protected-media",
+            Self::Section(_) => "section",
+            Self::Stats(_) => "stats",
+            Self::Chart(_) => "chart",
+            Self::Image(_) => "image",
+            Self::Qr(_) => "qr",
+            Self::Hero(_) => "hero",
+            Self::Steps(_) => "steps",
+            Self::Banner(_) => "banner",
+            Self::Timeline(_) => "timeline",
+        }
+    }
+
+    /// The blocks a section holds; none for any other kind.
+    pub fn children(&self) -> &[UiBlock] {
+        match self {
+            Self::Section(section) => &section.blocks,
+            _ => &[],
+        }
+    }
+
+    /// This block and, for a section, the blocks it holds.
+    pub fn with_children(&self) -> impl Iterator<Item = &UiBlock> {
+        std::iter::once(self).chain(self.children())
+    }
+
+    /// The field formats the block uses: the formats of its fields, column
+    /// value formats, stat, hero and chart formats (not those of its
+    /// children).
+    pub fn formats(&self) -> Vec<&UiFieldFormat> {
+        match self {
+            Self::Fields(b) => b.fields.iter().filter_map(|f| f.format.as_ref()).collect(),
+            Self::Rows(b) => b
+                .columns
+                .iter()
+                .filter_map(|c| c.value_format.as_ref())
+                .collect(),
+            Self::Stats(b) => b.items.iter().filter_map(|i| i.format.as_ref()).collect(),
+            Self::Chart(b) => b.format.iter().collect(),
+            Self::Hero(b) => b.format.iter().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Action ids this block owns (they are not listed as card buttons),
+    /// those of a section's blocks included.
     pub(crate) fn owned_actions(&self) -> Vec<&str> {
         match self {
             Self::Choices(block) => block.action.as_deref().into_iter().collect(),
             Self::Rows(block) => block.actions.iter().map(String::as_str).collect(),
             Self::ProtectedMedia(block) => vec![block.action.as_str()],
+            Self::Hero(block) => block.actions.iter().map(String::as_str).collect(),
+            Self::Banner(block) => block.action_id.as_deref().into_iter().collect(),
+            Self::Section(block) => block
+                .blocks
+                .iter()
+                .flat_map(UiBlock::owned_actions)
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -1016,6 +1709,7 @@ impl UiBlock {
                         &b.group_label_path,
                         &b.group_count_path,
                         &b.group_total_path,
+                        &b.time_path,
                     ]
                     .into_iter()
                     .all(optional_path)
@@ -1075,6 +1769,8 @@ impl UiBlock {
                             })
                     })
                     && optional_path(&b.cursor_path)
+                    && (!b.group_by_day
+                        || b.columns.iter().any(|c| c.format == UiColumnFormat::Time))
                     && b.actions.len() <= MAX_UI_ROW_ACTIONS
                     && b.actions
                         .iter()
@@ -1108,6 +1804,92 @@ impl UiBlock {
                                 .is_none_or(|id| action.form.contains(id))
                     })
             }
+            Self::Section(b) => {
+                optional_text(&b.label)
+                    && !b.blocks.is_empty()
+                    && b.blocks.len() <= MAX_UI_SECTION_BLOCKS
+                    && b.blocks.iter().all(|child| {
+                        !matches!(
+                            child,
+                            Self::Section(_) | Self::Rows(_) | Self::ProtectedMedia(_)
+                        ) && child.validate(actions, inputs).is_ok()
+                    })
+            }
+            Self::Stats(b) => {
+                (MIN_UI_STATS..=MAX_UI_STATS).contains(&b.items.len())
+                    && b.items.iter().all(|item| {
+                        valid_text(&item.label)
+                            && valid_path(&item.value_path)
+                            && optional_path(&item.trend_path)
+                            && item.format.as_ref().is_none_or(UiFieldFormat::is_valid)
+                    })
+            }
+            Self::Chart(b) => {
+                valid_path(&b.series_path)
+                    && valid_path(&b.label_path)
+                    && valid_path(&b.value_path)
+                    && optional_path(&b.points_path)
+                    && optional_path(&b.series_label_path)
+                    && (b.points_path.is_some() || b.series_label_path.is_none())
+                    && b.format.as_ref().is_none_or(UiFieldFormat::is_valid)
+                    && optional_text(&b.empty_text)
+            }
+            Self::Image(b) => {
+                valid_text(&b.alt)
+                    && match (&b.source.asset, &b.source.file_path) {
+                        (Some(asset), None) => crate::manifest::is_asset_path(asset),
+                        (None, Some(path)) => valid_path(path),
+                        _ => false,
+                    }
+            }
+            Self::Qr(b) => {
+                valid_path(&b.value_path)
+                    && optional_text(&b.label)
+                    && optional_text(&b.caption)
+                    && optional_path(&b.expires_at_path)
+                    && b.refresh_operation
+                        .as_deref()
+                        .is_none_or(|op| !op.is_empty() && op.len() <= 128)
+            }
+            Self::Hero(b) => {
+                let mut ids = BTreeSet::new();
+                optional_text(&b.label)
+                    && match (&b.amount_path, &b.value_path) {
+                        (Some(path), None) | (None, Some(path)) => valid_path(path),
+                        _ => false,
+                    }
+                    && optional_path(&b.subtitle_path)
+                    && b.format.as_ref().is_none_or(UiFieldFormat::is_valid)
+                    && b.actions.len() <= MAX_UI_HERO_ACTIONS
+                    && b.actions
+                        .iter()
+                        .all(|id| ids.insert(id) && any_action(actions, id).is_some())
+            }
+            Self::Steps(b) => {
+                (MIN_UI_STEPS..=MAX_UI_STEPS).contains(&b.items.len())
+                    && b.items
+                        .iter()
+                        .all(|step| valid_text(&step.label) && valid_path(&step.state_path))
+            }
+            Self::Banner(b) => {
+                text_or_path(&b.text, &b.path)
+                    && b.action_id
+                        .as_deref()
+                        .is_none_or(|id| any_action(actions, id).is_some())
+            }
+            Self::Timeline(b) => {
+                valid_path(&b.items_path)
+                    && valid_path(&b.time_path)
+                    && valid_path(&b.title_path)
+                    && optional_path(&b.detail_path)
+                    && optional_path(&b.status_path)
+                    && (b.status_path.is_some() || b.values.is_empty())
+                    && b.values.len() <= MAX_UI_VALUE_LABELS
+                    && b.values.iter().all(|(value, mapped)| {
+                        !value.is_empty() && value.len() <= 64 && valid_text(&mapped.label)
+                    })
+                    && optional_text(&b.empty_text)
+            }
         };
         if ok && valid_conditions(self.hidden_when()) {
             Ok(())
@@ -1139,12 +1921,15 @@ fn as_count(value: &Value) -> Option<u64> {
         _ => None,
     }
 }
+/// An instant in plugin data, within [`super::MAX_UI_INSTANT_MS`]; anything
+/// else reads as absent.
 fn as_instant(value: &Value) -> Option<i64> {
     match value {
         Value::Number(n) => n.as_i64(),
         Value::String(s) if !s.is_empty() && s.len() <= 20 => s.parse().ok(),
         _ => None,
     }
+    .and_then(super::ui_instant)
 }
 fn truthy(value: &Value) -> bool {
     match value {
@@ -1318,6 +2103,256 @@ impl UiBlock {
             }),
             Self::Rows(b) => ResolvedUiBlock::Rows(b.resolve(scope)?),
             Self::ProtectedMedia(b) => ResolvedUiBlock::ProtectedMedia(b.resolve(scope)?),
+            Self::Section(b) => {
+                let blocks: Vec<ResolvedUiBlock> =
+                    b.blocks.iter().filter_map(|c| c.resolve(scope)).collect();
+                if blocks.is_empty() {
+                    return None;
+                }
+                ResolvedUiBlock::Section(ResolvedUiSection {
+                    label: label(scope, &b.label),
+                    collapsed: b.collapsed,
+                    blocks,
+                })
+            }
+            Self::Stats(b) => {
+                let items: Vec<ResolvedUiStat> = b
+                    .items
+                    .iter()
+                    .filter_map(|item| {
+                        let raw = non_blank(scope.data.pointer(&item.value_path))?;
+                        let (text, format) = formatted(&item.format, scope, scope.data, &raw);
+                        Some(ResolvedUiStat {
+                            label: translate(scope.translation, &item.label),
+                            value: text.unwrap_or(raw),
+                            format,
+                            trend: non_blank(at(scope.data, &item.trend_path)).map(trend),
+                            tone: item.tone,
+                        })
+                    })
+                    .collect();
+                if items.is_empty() {
+                    return None;
+                }
+                ResolvedUiBlock::Stats(ResolvedUiStats { items })
+            }
+            Self::Chart(b) => ResolvedUiBlock::Chart(b.resolve(scope)?),
+            Self::Image(b) => {
+                let file_id = match &b.source.file_path {
+                    Some(path) => Some(
+                        crate::json::from_value::<super::UiFileReference>(
+                            scope.data.pointer(path)?.clone(),
+                        )
+                        .ok()
+                        .filter(super::UiFileReference::is_valid)?
+                        .file_id,
+                    ),
+                    None => None,
+                };
+                ResolvedUiBlock::Image(ResolvedUiImage {
+                    asset: b.source.asset.clone(),
+                    file_id,
+                    aspect: b.aspect,
+                    alt: translate(scope.translation, &b.alt),
+                })
+            }
+            Self::Qr(b) => {
+                let value = non_blank(scope.data.pointer(&b.value_path))
+                    .filter(|value| value.len() <= MAX_UI_QR_VALUE_BYTES)?;
+                ResolvedUiBlock::Qr(ResolvedUiQr {
+                    value,
+                    label: label(scope, &b.label),
+                    caption: label(scope, &b.caption),
+                    refresh_operation: b.refresh_operation.clone(),
+                    value_path: b.value_path.clone(),
+                    expires_at_path: b.expires_at_path.clone(),
+                    expires_at_ms: at(scope.data, &b.expires_at_path).and_then(as_instant),
+                })
+            }
+            Self::Hero(b) => {
+                let path = b.amount_path.as_deref().or(b.value_path.as_deref())?;
+                let raw = non_blank(scope.data.pointer(path))?;
+                let (text, format) = formatted(&b.format, scope, scope.data, &raw);
+                ResolvedUiBlock::Hero(ResolvedUiHero {
+                    label: label(scope, &b.label),
+                    value: text.unwrap_or(raw),
+                    amount: b.amount_path.is_some(),
+                    format,
+                    subtitle: non_blank(at(scope.data, &b.subtitle_path)),
+                    tone: b.tone,
+                    maskable: b.maskable,
+                    actions: b
+                        .actions
+                        .iter()
+                        .filter_map(|id| any_action(scope.actions, id))
+                        .filter(|action| visible(action, scope.data, scope.viewer))
+                        .map(|action| resolve_action(action, scope.translation))
+                        .collect(),
+                })
+            }
+            Self::Steps(b) => {
+                let states: Vec<Option<UiStepState>> = b
+                    .items
+                    .iter()
+                    .map(|step| {
+                        non_blank(scope.data.pointer(&step.state_path)).map(|raw| {
+                            crate::json::from_value::<UiStepState>(Value::String(raw))
+                                .unwrap_or_default()
+                        })
+                    })
+                    .collect();
+                if states.iter().all(Option::is_none) {
+                    return None;
+                }
+                ResolvedUiBlock::Steps(ResolvedUiSteps {
+                    items: b
+                        .items
+                        .iter()
+                        .zip(states)
+                        .map(|(step, state)| ResolvedUiStep {
+                            label: translate(scope.translation, &step.label),
+                            state: state.unwrap_or_default(),
+                        })
+                        .collect(),
+                })
+            }
+            Self::Banner(b) => ResolvedUiBlock::Banner(ResolvedUiBanner {
+                tone: b.tone,
+                text: literal_or_path(scope, &b.text, &b.path)?,
+                action: b
+                    .action_id
+                    .as_deref()
+                    .and_then(|id| any_action(scope.actions, id))
+                    .filter(|action| visible(action, scope.data, scope.viewer))
+                    .map(|action| resolve_action(action, scope.translation)),
+            }),
+            Self::Timeline(b) => {
+                let raw = scope.data.pointer(&b.items_path)?.as_array()?;
+                let items = raw
+                    .iter()
+                    .take(MAX_UI_TIMELINE_ITEMS)
+                    .filter_map(|item| {
+                        Some(ResolvedUiTimelineItem {
+                            at_ms: item.pointer(&b.time_path).and_then(as_instant)?,
+                            title: non_blank(item.pointer(&b.title_path))?,
+                            detail: non_blank(at(item, &b.detail_path)),
+                            status: non_blank(at(item, &b.status_path)).map(|raw| {
+                                match b.values.get(&raw) {
+                                    Some(mapped) => ResolvedUiBadge {
+                                        text: translate(scope.translation, &mapped.label),
+                                        tone: mapped.tone,
+                                    },
+                                    None => ResolvedUiBadge {
+                                        text: raw,
+                                        tone: UiTone::Neutral,
+                                    },
+                                }
+                            }),
+                        })
+                    })
+                    .collect();
+                ResolvedUiBlock::Timeline(ResolvedUiTimeline {
+                    items,
+                    empty_text: label(scope, &b.empty_text),
+                })
+            }
+        })
+    }
+}
+
+/// The text and the format of `raw`, read from `data`, through `format`.
+fn formatted(
+    format: &Option<UiFieldFormat>,
+    scope: &Scope<'_>,
+    data: &Value,
+    raw: &str,
+) -> (Option<String>, Option<ResolvedUiFormat>) {
+    format.as_ref().map_or((None, None), |format| {
+        format.resolve(data, raw, scope.translation)
+    })
+}
+
+/// The direction of a trend text: the sign of a number (a trailing `%`
+/// allowed), else a leading `+` or `-`.
+fn trend(text: String) -> ResolvedUiTrend {
+    let number = text
+        .trim()
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite());
+    let direction = match number {
+        Some(v) if v > 0.0 => UiTrendDirection::Up,
+        Some(v) if v < 0.0 => UiTrendDirection::Down,
+        Some(_) => UiTrendDirection::Flat,
+        None if text.trim_start().starts_with('+') => UiTrendDirection::Up,
+        None if text.trim_start().starts_with('-') => UiTrendDirection::Down,
+        None => UiTrendDirection::Flat,
+    };
+    ResolvedUiTrend { text, direction }
+}
+
+/// A finite number, or a string holding one.
+fn as_number(value: &Value) -> Option<f64> {
+    let number: Option<f64> = match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) if !s.is_empty() && s.len() <= 40 => s.trim().parse().ok(),
+        _ => None,
+    };
+    number.filter(|v| v.is_finite())
+}
+
+impl UiChartBlock {
+    fn resolve(&self, scope: &Scope<'_>) -> Option<ResolvedUiChart> {
+        let raw = scope.data.pointer(&self.series_path)?.as_array()?;
+        let raw_series: Vec<(Option<String>, &Vec<Value>)> = match &self.points_path {
+            None => vec![(None, raw)],
+            Some(points) => raw
+                .iter()
+                .filter_map(|series| {
+                    Some((
+                        non_blank(at(series, &self.series_label_path)),
+                        series.pointer(points)?.as_array()?,
+                    ))
+                })
+                .collect(),
+        };
+        let wanted = if self.chart_kind == UiChartKind::Donut {
+            1
+        } else {
+            MAX_UI_CHART_SERIES
+        };
+        let series: Vec<ResolvedUiChartSeries> = raw_series
+            .into_iter()
+            .take(wanted)
+            .filter_map(|(label, points)| {
+                let points: Vec<ResolvedUiChartPoint> = points
+                    .iter()
+                    .take(MAX_UI_CHART_POINTS)
+                    .filter_map(|point| {
+                        let label = non_blank(point.pointer(&self.label_path))?;
+                        let raw_value = point.pointer(&self.value_path)?;
+                        let value = as_number(raw_value)?;
+                        let raw = scalar_text(raw_value)?;
+                        let (text, _) = formatted(&self.format, scope, point, &raw);
+                        Some(ResolvedUiChartPoint {
+                            label,
+                            value,
+                            text: text.unwrap_or(raw),
+                        })
+                    })
+                    .collect();
+                (!points.is_empty()).then_some(ResolvedUiChartSeries { label, points })
+            })
+            .collect();
+        let empty_text = label(scope, &self.empty_text);
+        if series.is_empty() && empty_text.is_none() {
+            return None;
+        }
+        Some(ResolvedUiChart {
+            chart_kind: self.chart_kind,
+            empty_text: empty_text.filter(|_| series.is_empty()),
+            series,
         })
     }
 }
@@ -1499,6 +2534,11 @@ impl UiEntriesBlock {
                     user_id: user,
                     group,
                     badge: badge(&self.value_labels, item, scope.translation),
+                    time_ms: self
+                        .time_path
+                        .as_deref()
+                        .and_then(|p| item.pointer(p))
+                        .and_then(as_instant),
                 })
             })
             .collect();
@@ -1630,6 +2670,7 @@ impl UiRowsBlock {
             empty_text: label(scope, &self.empty_text),
             filters: self.filters.clone(),
             presentation: self.presentation,
+            group_by_day: self.group_by_day,
         })
     }
 }

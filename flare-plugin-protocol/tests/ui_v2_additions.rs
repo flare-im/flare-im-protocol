@@ -342,6 +342,7 @@ fn composer_catalog(configuration: Value) -> UiCatalog {
             extensions: manifest.client_extensions,
         }],
         unavailable: vec![],
+        payment_provider: None,
     }
 }
 fn composer_view(catalog: &UiCatalog, payload: Value) -> ResolvedPluginView {
@@ -787,11 +788,11 @@ fn paged_detail_carries_the_next_cursor_and_appends_pages() {
     let second = card
         .resolve_detail(&page(1, 2, Some("c-3")), "", "u1")
         .unwrap();
-    view.append_page(second);
+    append_both(&mut view, second);
     assert_eq!(view.next_cursor.as_deref(), Some("c-3"));
     let last = card.resolve_detail(&page(1, 1, None), "", "u1").unwrap();
     assert_eq!(last.next_cursor, None);
-    view.append_page(last);
+    append_both(&mut view, last);
     assert_eq!(view.next_cursor, None, "the last page ends paging");
     let entries = entries_of(&view);
     assert_eq!(
@@ -814,7 +815,8 @@ fn paged_detail_carries_the_next_cursor_and_appends_pages() {
             "u1",
         )
         .unwrap();
-    uncounted.append_page(
+    append_both(
+        &mut uncounted,
         card.resolve_detail(&json!({"entries": [{"text": "c"}]}), "", "u1")
             .unwrap(),
     );
@@ -825,7 +827,7 @@ fn paged_detail_carries_the_next_cursor_and_appends_pages() {
         .unwrap();
     let mut unavailable = stopped.clone();
     unavailable.available = false;
-    stopped.append_page(unavailable);
+    append_both(&mut stopped, unavailable);
     assert_eq!(stopped.next_cursor, None);
     assert_eq!(entries_of(&stopped).items.len(), 2);
 }
@@ -923,6 +925,7 @@ fn paged_detail_resolves_through_the_catalog_and_pages_admin_rows() {
             configuration: Default::default(),
         }],
         unavailable: vec![],
+        payment_provider: None,
     };
     let message = PluginMessage {
         plugin_id: "example.poll".into(),
@@ -1079,4 +1082,27 @@ fn schema_export_describes_the_additions() {
     assert!(defs["UiDetail"]["properties"]["cursorPath"].is_object());
     let text = schema.to_string();
     assert!(text.contains("im.conversation.members.check"));
+}
+
+/// Append `page` to `view`, and check that the shown-view append a client
+/// runs on the JSON a host passed back gives the same view.
+fn append_both(
+    view: &mut flare_plugin_protocol::ui::ResolvedPluginView,
+    page: flare_plugin_protocol::ui::ResolvedPluginView,
+) {
+    use flare_plugin_protocol::ui::{ResolvedUiBlock, ShownPluginView};
+    let mut shown = ShownPluginView::from_value(serde_json::to_value(&*view).unwrap()).unwrap();
+    let (entries, rows) = view
+        .blocks
+        .iter()
+        .fold((0, 0), |(e, r), block| match block {
+            ResolvedUiBlock::Entries(block) => (e + block.items.len(), r),
+            ResolvedUiBlock::Rows(block) => (e, r + block.rows.len()),
+            _ => (e, r),
+        });
+    assert_eq!((shown.entries(), shown.rows()), (entries, rows));
+    assert_eq!(shown.next_cursor(), view.next_cursor.as_deref());
+    shown.append_page(page.clone());
+    view.append_page(page);
+    assert_eq!(shown.into_value(), serde_json::to_value(&*view).unwrap());
 }

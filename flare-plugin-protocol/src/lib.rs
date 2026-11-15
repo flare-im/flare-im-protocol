@@ -3,11 +3,15 @@
 
 pub mod admin;
 pub mod authorization;
+pub mod bridge;
+pub mod bundle;
 pub mod command;
 pub mod configuration;
 pub mod data;
 pub mod event;
+pub mod fields;
 pub mod invocation;
+pub mod json;
 pub mod lifecycle;
 pub mod manifest;
 pub mod package;

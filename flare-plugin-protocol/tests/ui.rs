@@ -23,6 +23,7 @@ fn catalog() -> UiCatalog {
             configuration: Default::default(),
         }],
         unavailable: vec![],
+        payment_provider: None,
     }
 }
 #[test]
@@ -124,9 +125,8 @@ fn executable_ui_and_undeclared_bridge_targets_are_rejected() {
     }
     let mut catalog = catalog();
     let plugin = &mut catalog.plugins[0];
-    plugin.extensions.contributions[0].schema.actions[0].target = UiActionTarget::Native {
-        capability: NativeCapability::Camera,
-    };
+    plugin.extensions.contributions[0].schema.actions[0].target =
+        UiActionTarget::native(NativeCapability::Camera);
     assert!(
         catalog
             .action(

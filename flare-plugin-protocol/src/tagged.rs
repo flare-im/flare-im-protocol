@@ -8,23 +8,28 @@
 //!
 //! A `serde_json::Value` has nothing of that left to keep: its objects cannot
 //! hold a key twice. For a value, these enums take the tag out of the object
-//! and read the variant from the rest of it through `Value` itself, the path
+//! and read the variant from the rest of it through [`crate::json`], the path
 //! every one of their inner types already takes everywhere else. The tag is
 //! checked exactly as the derive checks it: missing, repeated, not a string,
 //! or naming no variant. The inner types are then read by `Value`'s rules, as
 //! they are outside these enums: a unit variant written `{"name": {}}` is
 //! refused, and an array one element too long is reported in `Value`'s words.
+use crate::json::ValueDeserializer;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor, value::StringDeserializer};
 use serde_json::{Map, Value};
 use std::{any::TypeId, fmt, marker::PhantomData};
 
 const TAG: &str = "kind";
 
-/// Whether `D` is an owned or a borrowed `serde_json::Value`. The answer is a
-/// constant of each instantiation, so the compiler keeps only the path taken.
+/// Whether `D` reads a JSON value: an owned or a borrowed
+/// `serde_json::Value`, or [`crate::json::ValueDeserializer`]. The answer is
+/// a constant of each instantiation, so the compiler keeps only the path
+/// taken.
 pub(crate) fn is_json_value<'de, D: de::Deserializer<'de>>() -> bool {
     let id = type_id::<D>();
-    id == TypeId::of::<Value>() || id == TypeId::of::<&'static Value>()
+    id == TypeId::of::<Value>()
+        || id == TypeId::of::<&'static Value>()
+        || id == TypeId::of::<crate::json::ValueDeserializer>()
 }
 
 /// `TypeId::of` without its `'static` bound; lifetimes do not take part.
@@ -181,17 +186,17 @@ impl<'de> de::VariantAccess<'de> for Rest {
         self,
         seed: T,
     ) -> Result<T::Value, Self::Error> {
-        seed.deserialize(self.0)
+        seed.deserialize(ValueDeserializer(self.0))
     }
     fn tuple_variant<V: Visitor<'de>>(self, _: usize, visitor: V) -> Result<V::Value, Self::Error> {
-        de::Deserializer::deserialize_any(self.0, visitor)
+        de::Deserializer::deserialize_any(ValueDeserializer(self.0), visitor)
     }
     fn struct_variant<V: Visitor<'de>>(
         self,
         _: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        de::Deserializer::deserialize_any(self.0, visitor)
+        de::Deserializer::deserialize_map(ValueDeserializer(self.0), visitor)
     }
 }
 
@@ -247,6 +252,12 @@ macro_rules! kind_tagged {
                 match value {
                     $($name::$variant { .. } => {})+
                 }
+            }
+
+            impl $name {
+                /// Every tag this enum reads, in declaration order: the
+                /// vocabulary source of [`crate::ui::engine_vocabulary`].
+                pub const KINDS: &'static [&'static str] = &[$($kind),+];
             }
         };
     };

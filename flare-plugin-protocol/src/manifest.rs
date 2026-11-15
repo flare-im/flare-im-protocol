@@ -143,6 +143,19 @@ pub struct PluginOperation {
     /// authorizes every call; the mode only says what a host may schedule.
     #[serde(default, skip_serializing_if = "OperationMode::is_command")]
     pub mode: OperationMode,
+    /// `query` only: the plugin answers with the caller's own data only (a
+    /// user reading their own identity documents), checked by the plugin
+    /// service per call. What lets a user page read through protected
+    /// media.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_scoped: bool,
+    /// `command` only: the operation runs only once the host confirmed it
+    /// with the viewer through a host capability (the `operation` of a
+    /// `paymentConfirmation` order). No declared action, bundle command or
+    /// background call reaches it; clients read the set as the catalog's
+    /// `transientOperations`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transient: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -281,6 +294,21 @@ pub struct ClientExtensions {
     pub contributions: Vec<UiContribution>,
     #[serde(default)]
     pub native_capabilities: Vec<crate::ui::NativeCapability>,
+    /// Web bundles (L3) of this version, at most
+    /// [`crate::bundle::MAX_WEB_BUNDLES`]: the manifest signs each one's
+    /// digest (D-08). In the client catalog Core lists only the bundles a
+    /// selected variant opens, with their addresses and approved bridge
+    /// permissions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = crate::bundle::MAX_WEB_BUNDLES))]
+    pub web_bundles: Vec<crate::bundle::WebBundleDecl>,
+}
+
+impl ClientExtensions {
+    /// The web bundle declared with `id`.
+    pub fn web_bundle(&self, id: &str) -> Option<&crate::bundle::WebBundleDecl> {
+        self.web_bundles.iter().find(|bundle| bundle.id == id)
+    }
 }
 
 #[derive(
@@ -376,6 +404,30 @@ pub struct UiContribution {
     /// leave it out of the client catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<Value>,
+    /// Ordered presentations of this contribution (at most
+    /// [`crate::ui::MAX_UI_VARIANTS`]): Core sends a client the first one
+    /// its descriptor satisfies ([`UiContribution::select`]). Without
+    /// variants the contribution is its own single presentation. Never in
+    /// the client catalog.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<crate::ui::UiContributionVariant>,
+    /// The lowest build per platform that shows this contribution; a lower
+    /// build gets an upgrade placeholder. Platforms not listed have no
+    /// floor. Never in the client catalog.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub min_client: BTreeMap<ClientPlatform, u64>,
+    /// Catalog only, set by Core: the id of the variant this contribution
+    /// was expanded from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+    /// Catalog only, set by Core: this is an upgrade placeholder; the client
+    /// shows it as `upgrade_required`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade: Option<crate::ui::UiUpgrade>,
+    /// Catalog only, from the selected variant: the web bundle that presents
+    /// this contribution ([`crate::ui::UiBundleRef`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<crate::ui::UiBundleRef>,
 }
 
 /// What Core tells a plugin about the card bound to one of its entities.
@@ -503,6 +555,31 @@ impl UiScanHandler {
             "clientExtensions.contributions.scan",
             "expected 1 to 8 unique pages and unique sources",
         )
+    }
+}
+impl UiContributionKind {
+    /// Every kind, in declaration order: the vocabulary source of
+    /// [`crate::ui::engine_vocabulary`].
+    pub const ALL: &'static [Self] = &[
+        Self::MessageContent,
+        Self::MessageAction,
+        Self::ConversationMenu,
+        Self::ComposerAction,
+        Self::Page,
+        Self::AccountEntry,
+        Self::ScanHandler,
+    ];
+    /// The wire name (`message-content`, ...).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::MessageContent => "message-content",
+            Self::MessageAction => "message-action",
+            Self::ConversationMenu => "conversation-menu",
+            Self::ComposerAction => "composer-action",
+            Self::Page => "page",
+            Self::AccountEntry => "account-entry",
+            Self::ScanHandler => "scan-handler",
+        }
     }
 }
 
@@ -782,6 +859,16 @@ impl PluginManifest {
                     "operations.timeoutMs",
                     "out of range",
                 )?;
+                ensure(
+                    !op.owner_scoped || op.mode == OperationMode::Query,
+                    "operations.ownerScoped",
+                    "query operations only",
+                )?;
+                ensure(
+                    !op.transient || op.mode == OperationMode::Command,
+                    "operations.transient",
+                    "command operations only",
+                )?;
             }
         }
         ensure(
@@ -894,6 +981,15 @@ impl PluginManifest {
                 "must be positive",
             )?;
             contribution.schema.validate()?;
+            contribution.validate_variants()?;
+            ensure(
+                contribution
+                    .min_client
+                    .keys()
+                    .all(|platform| self.client_extensions.platforms.contains(platform)),
+                "clientExtensions.contributions.minClient",
+                "platforms must be declared",
+            )?;
             ensure(
                 contribution.icon.as_deref().is_none_or(is_ui_icon_name),
                 "clientExtensions.contributions.icon",
@@ -913,46 +1009,8 @@ impl PluginManifest {
                 "clientExtensions.id",
                 "must belong to plugin",
             )?;
-            self.validate_contribution_surface(contribution)?;
-            let documents = std::iter::once(&contribution.schema)
-                .chain(contribution.detail.as_ref().map(|detail| &detail.document));
-            for document in documents {
-                for action in &document.actions {
-                    use crate::ui::UiActionTarget;
-                    let declared = match &action.target {
-                        UiActionTarget::Operation { operation } => {
-                            self.operation(operation).is_some()
-                        }
-                        UiActionTarget::Page { page, plugin_id }
-                            if plugin_id.as_ref().is_some_and(|p| p != &self.plugin_id) =>
-                        {
-                            plugin_id
-                                .as_ref()
-                                .is_some_and(|id| page.starts_with(&format!("{id}.")))
-                        }
-                        UiActionTarget::Page { page, .. } => self
-                            .client_extensions
-                            .contributions
-                            .iter()
-                            .any(|c| &c.id == page && c.kind == UiContributionKind::Page),
-                        UiActionTarget::Native { capability } => self
-                            .client_extensions
-                            .native_capabilities
-                            .contains(capability),
-                    };
-                    ensure(
-                        declared,
-                        "clientExtensions.actions",
-                        "target must be declared",
-                    )?;
-                }
-                for source in document.rows_sources() {
-                    ensure(
-                        self.operation(source).is_some(),
-                        "clientExtensions.blocks.rows.source",
-                        "must be a declared operation",
-                    )?;
-                }
+            for (expanded, _) in contribution.expansions() {
+                self.validate_presentation(&expanded)?;
             }
             permission_refs(
                 &contribution.required_permissions,
@@ -985,6 +1043,7 @@ impl PluginManifest {
             "clientExtensions.contributions",
             "too many contributions",
         )?;
+        self.validate_web_bundles()?;
         if let Some(admin) = &self.admin {
             admin.validate(self)?;
             for page in &admin.pages {
@@ -1001,6 +1060,61 @@ impl PluginManifest {
         }
         self.validate_features()?;
         self.validate_assets()
+    }
+
+    /// The web bundle declarations: at most
+    /// [`crate::bundle::MAX_WEB_BUNDLES`], unique ids, each valid
+    /// ([`crate::bundle::WebBundleDecl::validate_declared`]); every bundle a
+    /// variant opens or requires is declared, and every declared bundle is
+    /// opened by some variant.
+    fn validate_web_bundles(&self) -> Result<()> {
+        let bundles = &self.client_extensions.web_bundles;
+        ensure(
+            bundles.len() <= crate::bundle::MAX_WEB_BUNDLES,
+            "clientExtensions.webBundles",
+            "too many web bundles",
+        )?;
+        let mut ids = BTreeSet::new();
+        for bundle in bundles {
+            if let Err(error) = bundle.validate_declared() {
+                return Err(ProtocolError::InvalidManifest {
+                    field: "clientExtensions.webBundles".to_owned(),
+                    reason: error.to_string(),
+                });
+            }
+            ensure(
+                ids.insert(bundle.id.as_str()),
+                "clientExtensions.webBundles.id",
+                "duplicate web bundle",
+            )?;
+        }
+        let mut opened = BTreeSet::new();
+        for variant in self
+            .client_extensions
+            .contributions
+            .iter()
+            .flat_map(|contribution| &contribution.variants)
+        {
+            let referenced = variant
+                .bundle
+                .as_ref()
+                .map(|bundle| bundle.id.as_str())
+                .into_iter()
+                .chain(variant.requires.bundle.as_ref().map(|b| b.id.as_str()));
+            for id in referenced {
+                ensure(
+                    ids.contains(id),
+                    "clientExtensions.contributions.variants.bundle",
+                    "web bundle is not declared in clientExtensions.webBundles",
+                )?;
+                opened.insert(id);
+            }
+        }
+        ensure(
+            opened.len() == ids.len(),
+            "clientExtensions.webBundles",
+            "a declared web bundle is opened by no variant",
+        )
     }
 
     /// What a publisher may declare as a feature: unique ids, bounded texts,
@@ -1236,12 +1350,19 @@ impl PluginManifest {
     }
 
     /// Operations the client contributions use: action targets, rows sources,
-    /// details, viewer states, summaries, page sources and entity lifecycle
-    /// callbacks of every contribution. No admin operation may be one of them.
+    /// details, viewer states, summaries, page sources, QR refreshes and
+    /// entity lifecycle callbacks of every presentation of every contribution
+    /// (each variant expanded). No admin operation may be one of them.
     pub fn client_operation_refs(&self) -> BTreeSet<String> {
         use crate::ui::UiActionTarget;
         let mut operations = BTreeSet::new();
-        for contribution in &self.client_extensions.contributions {
+        let presentations = self
+            .client_extensions
+            .contributions
+            .iter()
+            .flat_map(UiContribution::expansions)
+            .map(|(expanded, _)| expanded);
+        for contribution in &presentations.collect::<Vec<_>>() {
             operations.extend(
                 [
                     contribution.detail.as_ref().map(|d| &d.operation),
@@ -1270,6 +1391,10 @@ impl PluginManifest {
                 }
                 operations.extend(document.actions.iter().filter_map(|a| match &a.target {
                     UiActionTarget::Operation { operation } => Some(operation.clone()),
+                    _ => None,
+                }));
+                operations.extend(document.all_blocks().filter_map(|block| match block {
+                    crate::ui::UiBlock::Qr(qr) => qr.refresh_operation.clone(),
                     _ => None,
                 }));
             }
@@ -1310,6 +1435,79 @@ impl PluginManifest {
                 reason: "entityPath without entityLifecycle.unbound: the plugin is not told when its card is recalled or never posted".to_owned(),
             })
             .collect()
+    }
+
+    /// One presentation of a contribution (the contribution itself, or one
+    /// of its variants expanded): its documents, kind rules
+    /// ([`Self::validate_contribution_surface`]), declared action targets and
+    /// rows sources.
+    fn validate_presentation(&self, contribution: &UiContribution) -> Result<()> {
+        use crate::ui::UiActionTarget;
+        contribution.schema.validate()?;
+        self.validate_contribution_surface(contribution)?;
+        let documents = std::iter::once(&contribution.schema)
+            .chain(contribution.detail.as_ref().map(|detail| &detail.document));
+        for document in documents {
+            for action in &document.actions {
+                let declared = match &action.target {
+                    // A transient operation runs only behind a host confirmation.
+                    UiActionTarget::Operation { operation } => {
+                        self.operation(operation).is_some_and(|op| !op.transient)
+                    }
+                    UiActionTarget::Page { page, plugin_id }
+                        if plugin_id.as_ref().is_some_and(|p| p != &self.plugin_id) =>
+                    {
+                        plugin_id
+                            .as_ref()
+                            .is_some_and(|id| page.starts_with(&format!("{id}.")))
+                    }
+                    UiActionTarget::Page { page, .. } => self
+                        .client_extensions
+                        .contributions
+                        .iter()
+                        .any(|c| &c.id == page && c.kind == UiContributionKind::Page),
+                    UiActionTarget::Native { capability, .. } => self
+                        .client_extensions
+                        .native_capabilities
+                        .contains(capability),
+                };
+                ensure(
+                    declared,
+                    "clientExtensions.actions",
+                    "target must be declared",
+                )?;
+            }
+            for source in document.rows_sources() {
+                ensure(
+                    self.operation(source).is_some(),
+                    "clientExtensions.blocks.rows.source",
+                    "must be a declared operation",
+                )?;
+            }
+            for block in document.all_blocks() {
+                match block {
+                    crate::ui::UiBlock::Image(image) => ensure(
+                        image
+                            .source
+                            .asset
+                            .as_ref()
+                            .is_none_or(|asset| self.assets.iter().any(|a| &a.path == asset)),
+                        "clientExtensions.blocks.image.source.asset",
+                        "must be a declared asset",
+                    )?,
+                    crate::ui::UiBlock::Qr(qr) => ensure(
+                        qr.refresh_operation.as_ref().is_none_or(|operation| {
+                            self.operation(operation)
+                                .is_some_and(|op| op.mode == OperationMode::Query)
+                        }),
+                        "clientExtensions.blocks.qr.refreshOperation",
+                        "must be a declared query operation",
+                    )?,
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Contribution-kind rules for the v2 fields: entity binding, forwarding,
@@ -1600,9 +1798,30 @@ impl PluginManifest {
             )?;
             ensure(
                 document.is_client_surface(),
-                "clientExtensions.blocks",
-                "protected media and input references are for admin pages only",
+                "clientExtensions.inputs.reference",
+                "input references are for admin pages only",
             )?;
+            for block in &document.blocks {
+                let crate::ui::UiBlock::ProtectedMedia(media) = block else {
+                    continue;
+                };
+                // A user page reads the viewer's own material only: through
+                // an owner-scoped query the plugin checks per call.
+                let owner_read = document
+                    .actions
+                    .iter()
+                    .find(|action| action.id == media.action)
+                    .and_then(|action| match &action.target {
+                        UiActionTarget::Operation { operation } => self.operation(operation),
+                        _ => None,
+                    })
+                    .is_some_and(|op| op.mode == OperationMode::Query && op.owner_scoped);
+                ensure(
+                    page && index == 0 && owner_read,
+                    "clientExtensions.blocks.protected-media",
+                    "a page's main document reads protected media through an owner-scoped query",
+                )?;
+            }
         }
         if page && let Some(rows) = contribution.schema.rows() {
             // A page's rows are its source's data and page with it.

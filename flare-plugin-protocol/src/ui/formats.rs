@@ -51,6 +51,10 @@ pub enum UiFieldFormat {
     Person(UiPersonFormat),
     Reference(UiReferenceFormat),
     Time(UiTimeFormat),
+    Percent(UiPercentFormat),
+    Duration(UiDurationFormat),
+    Count(UiCountFormat),
+    Bytes(UiBytesFormat),
 }
 kind_tagged! {
     UiFieldFormat = "UiFieldFormat" {
@@ -59,6 +63,10 @@ kind_tagged! {
         "person" => Person(UiPersonFormat),
         "reference" => Reference(UiReferenceFormat),
         "time" => Time(UiTimeFormat),
+        "percent" => Percent(UiPercentFormat),
+        "duration" => Duration(UiDurationFormat),
+        "count" => Count(UiCountFormat),
+        "bytes" => Bytes(UiBytesFormat),
     }
 }
 
@@ -105,6 +113,56 @@ pub struct UiReferenceFormat {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiTimeFormat {}
 
+/// Largest `decimals` of a percent format.
+pub const MAX_UI_PERCENT_DECIMALS: u8 = 4;
+
+/// A number shown as a percentage: the value is already in percent (`42`),
+/// or with `ratio` a fraction (`0.42`). The text has `decimals` (`0..=4`,
+/// default 0) fraction digits and a `%` sign.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiPercentFormat {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ratio: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decimals: Option<u8>,
+}
+
+/// The unit of a duration value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiDurationUnit {
+    #[default]
+    Milliseconds,
+    Seconds,
+}
+impl UiDurationUnit {
+    pub fn is_milliseconds(&self) -> bool {
+        *self == Self::Milliseconds
+    }
+}
+/// A non-negative length of time, as a number or a digit string in `unit`.
+/// Kits show it in words ("2 h 5 min"); the plain text is compact and
+/// language neutral (`2h 5m`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiDurationFormat {
+    #[serde(default, skip_serializing_if = "UiDurationUnit::is_milliseconds")]
+    pub unit: UiDurationUnit,
+}
+
+/// A non-negative integer that kits show compact in the viewer's language
+/// ("1.2万", "1.2K"). The plain text stays the integer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiCountFormat {}
+
+/// A non-negative size in bytes; the plain text uses binary units
+/// (`1.5 MB` for 1 572 864).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiBytesFormat {}
+
 /// What a resolved field adds to its plain text.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -114,6 +172,10 @@ pub enum ResolvedUiFormat {
     Person(ResolvedUiPerson),
     Reference(ResolvedUiReference),
     Time(ResolvedUiInstant),
+    Percent(ResolvedUiPercent),
+    Duration(ResolvedUiDuration),
+    Count(ResolvedUiCount),
+    Bytes(ResolvedUiBytes),
 }
 kind_tagged! {
     ResolvedUiFormat = "ResolvedUiFormat" {
@@ -122,6 +184,10 @@ kind_tagged! {
         "person" => Person(ResolvedUiPerson),
         "reference" => Reference(ResolvedUiReference),
         "time" => Time(ResolvedUiInstant),
+        "percent" => Percent(ResolvedUiPercent),
+        "duration" => Duration(ResolvedUiDuration),
+        "count" => Count(ResolvedUiCount),
+        "bytes" => Bytes(ResolvedUiBytes),
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -153,10 +219,45 @@ pub struct ResolvedUiReference {
     /// console does not show.
     pub labelled: bool,
 }
+/// The widest instant a resolved view carries, in ms either side of the
+/// epoch: the ECMAScript `Date` range, which every design kit can draw. Plugin
+/// data outside it (a "never expires" year 99999, a corrupted value) resolves
+/// as if absent, so no kit has to defend against an instant it cannot show.
+pub const MAX_UI_INSTANT_MS: i64 = 8_640_000_000_000_000;
+
+/// `ms` when it is within [`MAX_UI_INSTANT_MS`] of the epoch.
+pub fn ui_instant(ms: i64) -> Option<i64> {
+    (-MAX_UI_INSTANT_MS..=MAX_UI_INSTANT_MS)
+        .contains(&ms)
+        .then_some(ms)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedUiInstant {
     pub at_ms: i64,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiPercent {
+    /// The value in percent (a ratio already multiplied by 100).
+    pub percent: f64,
+    pub decimals: u8,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiDuration {
+    pub ms: u64,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiCount {
+    pub count: u64,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiBytes {
+    pub bytes: u64,
 }
 
 fn minor_text(raw: &str, scale: u8) -> String {
@@ -182,6 +283,21 @@ fn text_at(data: &Value, path: &str) -> Option<String> {
 }
 
 impl UiFieldFormat {
+    /// The wire tag of this format (`money`, `percent`, ...).
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Money(_) => "money",
+            Self::Enum(_) => "enum",
+            Self::Person(_) => "person",
+            Self::Reference(_) => "reference",
+            Self::Time(_) => "time",
+            Self::Percent(_) => "percent",
+            Self::Duration(_) => "duration",
+            Self::Count(_) => "count",
+            Self::Bytes(_) => "bytes",
+        }
+    }
+
     pub(crate) fn is_valid(&self) -> bool {
         match self {
             Self::Money(f) => {
@@ -200,7 +316,12 @@ impl UiFieldFormat {
                     })
             }
             Self::Reference(f) => valid_path(&f.label_path),
-            Self::Person(_) | Self::Time(_) => true,
+            Self::Percent(f) => f.decimals.is_none_or(|d| d <= MAX_UI_PERCENT_DECIMALS),
+            Self::Person(_)
+            | Self::Time(_)
+            | Self::Duration(_)
+            | Self::Count(_)
+            | Self::Bytes(_) => true,
         }
     }
 
@@ -264,9 +385,99 @@ impl UiFieldFormat {
                 None,
                 raw.parse()
                     .ok()
+                    .and_then(ui_instant)
                     .map(|at_ms| ResolvedUiFormat::Time(ResolvedUiInstant { at_ms })),
             ),
+            Self::Percent(f) => {
+                let Some(value) = raw.trim().parse::<f64>().ok().filter(|v| v.is_finite()) else {
+                    return (None, None);
+                };
+                let percent = if f.ratio { value * 100.0 } else { value };
+                let decimals = f.decimals.unwrap_or(0).min(MAX_UI_PERCENT_DECIMALS);
+                (
+                    Some(format!("{percent:.prec$}%", prec = usize::from(decimals))),
+                    Some(ResolvedUiFormat::Percent(ResolvedUiPercent {
+                        percent,
+                        decimals,
+                    })),
+                )
+            }
+            Self::Duration(f) => {
+                let Some(value) = raw.trim().parse::<u64>().ok() else {
+                    return (None, None);
+                };
+                let ms = match f.unit {
+                    UiDurationUnit::Milliseconds => value,
+                    UiDurationUnit::Seconds => value.saturating_mul(1000),
+                };
+                (
+                    Some(duration_text(ms)),
+                    Some(ResolvedUiFormat::Duration(ResolvedUiDuration { ms })),
+                )
+            }
+            Self::Count(_) => match raw.trim().parse::<u64>() {
+                Ok(count) => (
+                    None,
+                    Some(ResolvedUiFormat::Count(ResolvedUiCount { count })),
+                ),
+                Err(_) => (None, None),
+            },
+            Self::Bytes(_) => match raw.trim().parse::<u64>() {
+                Ok(bytes) => (
+                    Some(bytes_text(bytes)),
+                    Some(ResolvedUiFormat::Bytes(ResolvedUiBytes { bytes })),
+                ),
+                Err(_) => (None, None),
+            },
         }
+    }
+}
+
+/// `2h 5m`, `45s`, `1d 3h`, `350ms`: the two largest non-zero units.
+fn duration_text(ms: u64) -> String {
+    if ms < 1000 {
+        return format!("{ms}ms");
+    }
+    let units = [
+        ("d", 86_400_000),
+        ("h", 3_600_000),
+        ("m", 60_000),
+        ("s", 1000),
+    ];
+    let mut rest = ms;
+    let mut parts = Vec::new();
+    for (name, size) in units {
+        let amount = rest / size;
+        rest %= size;
+        if amount > 0 {
+            parts.push(format!("{amount}{name}"));
+        } else if !parts.is_empty() {
+            // Keep the two units adjacent: `1d 0h` reads as `1d`.
+            break;
+        }
+        if parts.len() == 2 {
+            break;
+        }
+    }
+    parts.join(" ")
+}
+
+/// `512 B`, `1.5 KB`, `20 MB` in binary units, one fraction digit below 10.
+fn bytes_text(bytes: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else if value < 10.0 {
+        let text = format!("{value:.1}");
+        format!("{} {}", text.trim_end_matches(".0"), UNITS[unit])
+    } else {
+        format!("{value:.0} {}", UNITS[unit])
     }
 }
 

@@ -136,6 +136,63 @@ pub struct ProjectedPlugin {
     /// [`PluginManifest::closed_operations`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub features: BTreeMap<String, bool>,
+    /// Where this application's clients fetch the version's approved web bundles, and the bridge
+    /// permissions the application approved for each. A bundle missing here is not served to
+    /// this application. Core serves one only when its registry also holds it approved and not
+    /// withdrawn with the same digest, and the manifest declares it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_bundles: Vec<ProjectedWebBundle>,
+}
+
+/// One web bundle of a [`ProjectedPlugin`]: the application's mirror addresses for its `.fwb`
+/// file (the bootstrap of the application, in failover order), the base address of its unpacked
+/// files for Web and Tauri clients, and the bridge permissions the application approved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectedWebBundle {
+    /// [`crate::bundle::WebBundleDecl::id`].
+    pub id: String,
+    /// 64 lowercase hex digits, the manifest's declared digest.
+    pub sha256: String,
+    /// `https` addresses of the `.fwb` file, `1..=MAX_WEB_BUNDLE_URLS`.
+    pub urls: Vec<String>,
+    /// `https` base ending in `/` of the unpacked copy (`<files><path>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub permissions: BTreeSet<crate::bridge::BridgePermission>,
+}
+impl ProjectedWebBundle {
+    pub fn validate(&self) -> Result<()> {
+        use crate::bundle::{MAX_WEB_BUNDLE_URLS, is_https_url, is_sha256_hex};
+        if !crate::ui::valid_bundle_id(&self.id)
+            || !is_sha256_hex(&self.sha256)
+            || self.urls.is_empty()
+            || self.urls.len() > MAX_WEB_BUNDLE_URLS
+            || !self.urls.iter().all(|url| is_https_url(url))
+            || self
+                .files
+                .as_deref()
+                .is_some_and(|files| !is_https_url(files) || !files.ends_with('/'))
+        {
+            return Err(ProtocolError::Denied("invalid projected web bundle"));
+        }
+        Ok(())
+    }
+
+    /// The catalog entry of `decl` (the manifest's declaration with this digest) for this
+    /// application.
+    pub fn catalog_entry(
+        &self,
+        decl: &crate::bundle::WebBundleDecl,
+    ) -> crate::bundle::WebBundleDecl {
+        crate::bundle::WebBundleDecl {
+            urls: self.urls.clone(),
+            files: self.files.clone(),
+            permissions: self.permissions.clone(),
+            ..decl.declared()
+        }
+    }
 }
 impl ProjectedPlugin {
     pub fn manifest_digest(&self) -> &str {
@@ -253,6 +310,16 @@ impl PluginProjection {
                 &mut ids,
                 &mut active,
             )?;
+            if plugin.web_bundles.len() > crate::bundle::MAX_WEB_BUNDLES {
+                return Err(ProtocolError::Denied("invalid projected web bundle"));
+            }
+            let mut bundles = BTreeSet::new();
+            for bundle in &plugin.web_bundles {
+                bundle.validate()?;
+                if !bundles.insert(&bundle.id) {
+                    return Err(ProtocolError::Denied("invalid projected web bundle"));
+                }
+            }
         }
         if self.bindings.len() > MAX_SNAPSHOT_BINDINGS {
             return Err(ProtocolError::Denied("runtime projection exceeds limit"));
@@ -353,6 +420,10 @@ pub struct ResolvedPlugin {
     pub client_configuration: serde_json::Map<String, serde_json::Value>,
     /// The application's feature states by [`crate::manifest::PluginFeature::id`].
     pub features: BTreeMap<String, bool>,
+    /// The web bundles clients of this application may run, in catalog form (the manifest's
+    /// declaration with this application's addresses and approved bridge permissions). Empty
+    /// from [`ResolvedPlugin::new`]; set with [`ResolvedPlugin::with_web_bundles`].
+    pub web_bundles: Vec<crate::bundle::WebBundleDecl>,
     manifest: Arc<PluginManifest>,
     closed: ClosedFeatures,
 }
@@ -399,9 +470,31 @@ impl ResolvedPlugin {
             configuration_digest,
             client_configuration,
             features,
+            web_bundles: Vec::new(),
             manifest,
             closed,
         })
+    }
+    /// With the web bundles clients may run. Each must be a declaration of the manifest with the
+    /// same digest, size, bridge and digital goods flag, in valid catalog form, at most once.
+    pub fn with_web_bundles(mut self, bundles: Vec<crate::bundle::WebBundleDecl>) -> Result<Self> {
+        let mut ids = BTreeSet::new();
+        for bundle in &bundles {
+            let declared = self.manifest.client_extensions.web_bundle(&bundle.id);
+            if declared.is_none_or(|decl| *decl != bundle.declared())
+                || bundle.validate_catalog().is_err()
+                || !ids.insert(bundle.id.as_str())
+            {
+                return Err(ProtocolError::Denied(
+                    "web bundle does not match the manifest",
+                ));
+            }
+        }
+        self.web_bundles = bundles;
+        Ok(self)
+    }
+    pub fn web_bundle(&self, id: &str) -> Option<&crate::bundle::WebBundleDecl> {
+        self.web_bundles.iter().find(|bundle| bundle.id == id)
     }
     pub fn manifest(&self) -> &PluginManifest {
         &self.manifest

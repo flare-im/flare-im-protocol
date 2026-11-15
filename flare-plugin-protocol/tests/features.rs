@@ -453,6 +453,7 @@ fn unset_projection_fields_leave_the_wire_as_it_was() {
         lifecycle: ProjectedLifecycle::Installed,
         export_until_ms: None,
         features: Default::default(),
+        web_bundles: Vec::new(),
     };
     let raw = serde_json::to_value(&projected).unwrap();
     assert!(raw.get("features").is_none());

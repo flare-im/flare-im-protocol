@@ -36,6 +36,7 @@ fn catalog() -> UiCatalog {
             configuration: Default::default(),
         }],
         unavailable: vec![],
+        payment_provider: None,
     }
 }
 fn context<'a>(locale: &'a str, viewer: &'a str) -> UiRenderContext<'a> {
@@ -592,7 +593,7 @@ fn entries_and_people_blocks() {
     );
     for bad in [
         json!({"kind": "entries", "itemsPath": "/l", "limit": 0}),
-        json!({"kind": "entries", "itemsPath": "/l", "limit": 51}),
+        json!({"kind": "entries", "itemsPath": "/l", "limit": 101}),
         json!({"kind": "people", "groups": []}),
         json!({"kind": "people", "groups": [{"label": "x"}]}),
         json!({"kind": "people", "max": 11, "groups": [{"label": "x", "countPath": "/c"}]}),
@@ -900,9 +901,8 @@ fn inputs_declare_kind_specific_fields_only() {
         serde_json::from_value::<UiDocument>(
             json!({"title": "t", "inputs": [{"id": "a", "kind": "file", "label": "a"}]})
         )
-        .unwrap()
-        .validate()
-        .is_err()
+        .map_or(true, |document| document.validate().is_err()),
+        "a file input without its upload is rejected"
     );
     let duplicate = doc(json!({"title": "t", "inputs": [
         {"id": "a", "kind": "text", "label": "a"}, {"id": "a", "kind": "toggle", "label": "b"}
@@ -1859,8 +1859,10 @@ fn manifests_without_display_conditions_parse_and_serialize_as_before() {
     // inlined in UiBlock) and on the detail.
     let schema = serde_json::to_value(schemars::schema_for!(PluginManifest)).unwrap();
     let variants = schema["$defs"]["UiBlock"]["oneOf"].as_array().unwrap();
-    // Every card kind, plus the page-only `rows` and `protected-media`.
-    assert_eq!(variants.len(), CARD_KINDS.len() + 2);
+    // Every block kind: the card kinds, the page-only `rows` and
+    // `protected-media`, and the kinds added with client hot delivery.
+    assert_eq!(variants.len(), UiBlock::KINDS.len());
+    assert_eq!(UiBlock::KINDS.len(), CARD_KINDS.len() + 2 + 9);
     for variant in variants {
         assert!(
             variant["properties"]["hiddenWhen"].is_object(),

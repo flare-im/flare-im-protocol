@@ -22,12 +22,31 @@
 //! ([`UiValueLabels`]). Console pages add, equally optional: field and column
 //! formats ([`UiFieldFormat`]), input references ([`UiReference`]), rows cards
 //! ([`UiRowsPresentation`]) and protected media ([`UiProtectedMediaBlock`]).
+//!
+//! Client hot delivery adds, equally optional: the client's UI capability
+//! descriptor ([`ClientUiDescriptor`]) and the vocabulary it is made of
+//! ([`UiVocabulary`]); contribution variants with their requirements
+//! ([`UiContributionVariant`], [`UiRequires`]), the selection Core makes
+//! with them ([`UiContribution::select`]) and the upgrade placeholder
+//! ([`UiUpgrade`], [`UiUnavailableReason::UpgradeRequired`]); tolerant
+//! reading of a catalog contribution ([`lenient::prepare_contribution`])
+//! with `required` blocks; the blocks `section`, `stats`, `chart`, `image`,
+//! `qr`, `hero`, `steps`, `banner` and `timeline`; the inputs `money`,
+//! `image` and `document`; the formats `percent`, `duration`, `count` and
+//! `bytes`; native capability parameters ([`NativeParams`]) and `into`.
 mod blocks;
+mod descriptor;
 mod formats;
 mod inputs;
+pub mod lenient;
+mod shown;
+mod variants;
 pub use blocks::*;
+pub use descriptor::*;
 pub use formats::*;
 pub use inputs::*;
+pub use shown::*;
+pub use variants::*;
 
 use crate::{
     ProtocolError, Result,
@@ -74,12 +93,13 @@ pub struct UiDocument {
     pub fields: Vec<UiField>,
     #[serde(default)]
     pub actions: Vec<UiAction>,
-    /// Display blocks, in order (`0..=24`).
+    /// Display blocks, in order: at most [`MAX_UI_BLOCKS`], the blocks of
+    /// sections included.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<UiBlock>,
     /// Form inputs referenced by action forms, and the filters of the rows
     /// block of a page or an admin page (`admin.pages`): its `filters`, or
-    /// every input when it lists none (`0..=16`).
+    /// every input when it lists none (at most [`MAX_UI_INPUTS`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<UiInput>,
     #[serde(default)]
@@ -332,7 +352,7 @@ impl UiViewerState {
         Some(
             items
                 .iter()
-                .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                .filter_map(|item| crate::json::from_value(item.clone()).ok())
                 .collect(),
         )
     }
@@ -432,9 +452,10 @@ pub struct UiAction {
     /// plugin still authorizes every invocation; hiding is never a permission.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
-    /// Ids of document inputs the host collects first (`0..=16`, operation or
-    /// transient reauthenticate targets); their validated values join the action input under their
-    /// ids, which must not repeat a declared input name.
+    /// Ids of document inputs the host collects first (at most
+    /// [`MAX_UI_INPUTS`], operation or transient reauthenticate targets);
+    /// their validated values join the action input under their ids, which
+    /// must not repeat a declared input name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub form: Vec<String>,
     /// Asked before invoking (translated through `texts`).
@@ -712,8 +733,15 @@ pub enum UiActionTarget {
         #[serde(rename = "pluginId", default, skip_serializing_if = "Option::is_none")]
         plugin_id: Option<String>,
     },
+    /// A host capability. `params` has the fixed shape of the capability
+    /// ([`NativeCapability::accepts`]); `into` names an input of the same
+    /// document the result is written to ([`NativeCapability::into_kinds`]).
     Native {
         capability: NativeCapability,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        params: Option<NativeParams>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        into: Option<String>,
     },
 }
 kind_tagged! {
@@ -724,9 +752,28 @@ kind_tagged! {
             #[serde(rename = "pluginId", default)]
             plugin_id: Option<String>,
         },
-        "native" => Native { capability: NativeCapability },
+        "native" => Native {
+            capability: NativeCapability,
+            #[serde(default)]
+            params: Option<NativeParams>,
+            #[serde(default)]
+            into: Option<String>,
+        },
     }
 }
+impl UiActionTarget {
+    /// A native target without parameters or `into`.
+    pub fn native(capability: NativeCapability) -> Self {
+        Self::Native {
+            capability,
+            params: None,
+            into: None,
+        }
+    }
+}
+/// A capability the host provides to every plugin, named for what it does,
+/// never for who uses it. Secrets stay in the host: a plugin gets a result
+/// its server can verify (a `fileId`, a signed ticket, a session handle).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -739,6 +786,222 @@ pub enum NativeCapability {
     ClipboardWrite,
     /// Host-owned verification. Secrets remain in an ephemeral host flow.
     Reauthenticate,
+    /// The host shows the order a plugin operation returned
+    /// ([`PaymentConfirmationOrder`], `data.confirmation`), verifies the
+    /// viewer (payment password or biometrics) and calls the order's
+    /// transient operation with a Core-issued ticket. Started by an
+    /// operation result, never by a declared action.
+    PaymentConfirmation,
+    /// The host frames, compresses and strips an identity document photo,
+    /// uploads it privately and writes `{fileId}` into a `document` input.
+    DocumentCapture,
+    /// One position fix, confirmed by the viewer each time, truncated to the
+    /// declared precision and written into a `location` input of the same
+    /// precision ([`UiLocationValue`]).
+    LocationOnce,
+    /// A host-held audio/video session; signalling goes through plugin
+    /// operations.
+    RtcSession,
+}
+impl NativeCapability {
+    /// Every capability, in declaration order: the vocabulary source of
+    /// [`engine_vocabulary`].
+    pub const ALL: &'static [Self] = &[
+        Self::SelectImage,
+        Self::SelectFile,
+        Self::Camera,
+        Self::Microphone,
+        Self::ClipboardWrite,
+        Self::Reauthenticate,
+        Self::PaymentConfirmation,
+        Self::DocumentCapture,
+        Self::LocationOnce,
+        Self::RtcSession,
+    ];
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|known| known.name() == name)
+    }
+    /// The wire name (`selectImage`, ...).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::SelectImage => "selectImage",
+            Self::SelectFile => "selectFile",
+            Self::Camera => "camera",
+            Self::Microphone => "microphone",
+            Self::ClipboardWrite => "clipboardWrite",
+            Self::Reauthenticate => "reauthenticate",
+            Self::PaymentConfirmation => "paymentConfirmation",
+            Self::DocumentCapture => "documentCapture",
+            Self::LocationOnce => "locationOnce",
+            Self::RtcSession => "rtcSession",
+        }
+    }
+    /// The input kinds an action's `into` may name: what the result is
+    /// written to. Empty: the capability takes no `into`.
+    pub fn into_kinds(self) -> &'static [UiInputKind] {
+        match self {
+            Self::SelectImage | Self::Camera => &[UiInputKind::Image, UiInputKind::File],
+            Self::SelectFile => &[UiInputKind::File],
+            Self::DocumentCapture => &[UiInputKind::Document],
+            Self::LocationOnce => &[UiInputKind::Location],
+            _ => &[],
+        }
+    }
+    /// Whether a declared action may target the capability with `params` and
+    /// `into`: `documentCapture` and `locationOnce` take their parameters and
+    /// an `into`; `rtcSession` takes its parameters; the others take none;
+    /// `paymentConfirmation` is never a declared target.
+    pub fn accepts(self, params: Option<&NativeParams>, into: Option<&str>) -> bool {
+        let into_ok = match into {
+            None => !self.needs_into(),
+            Some(id) => !self.into_kinds().is_empty() && valid_name(id),
+        };
+        into_ok
+            && match (self, params) {
+                (Self::PaymentConfirmation, _) => false,
+                (Self::DocumentCapture, Some(NativeParams::DocumentCapture(_))) => true,
+                (Self::LocationOnce, Some(NativeParams::LocationOnce(_))) => true,
+                (Self::RtcSession, Some(NativeParams::RtcSession(p))) => p.is_valid(),
+                (Self::DocumentCapture | Self::LocationOnce | Self::RtcSession, _) => false,
+                (_, params) => params.is_none(),
+            }
+    }
+    /// Whether the capability only writes into an input, so a target of it
+    /// names one (`documentCapture`, `locationOnce`).
+    pub fn needs_into(self) -> bool {
+        matches!(self, Self::DocumentCapture | Self::LocationOnce)
+    }
+    /// Capabilities a tenant approves like a permission: they enter the
+    /// permission difference of an upgrade request.
+    pub fn is_sensitive(self) -> bool {
+        matches!(
+            self,
+            Self::PaymentConfirmation
+                | Self::DocumentCapture
+                | Self::LocationOnce
+                | Self::RtcSession
+        )
+    }
+    /// Whether the host asks the viewer's consent the first time a plugin
+    /// uses the capability. Picking a file or an image, writing the
+    /// clipboard and answering a verification prompt are the viewer's own
+    /// gestures and need none.
+    pub fn needs_consent(self) -> bool {
+        !matches!(
+            self,
+            Self::SelectImage | Self::SelectFile | Self::ClipboardWrite | Self::Reauthenticate
+        )
+    }
+}
+/// The parameters of a native capability target, one shape per capability
+/// ([`NativeCapability::accepts`]). Each shape has a required field of its
+/// own, so a value reads as at most one of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum NativeParams {
+    DocumentCapture(DocumentCaptureParams),
+    LocationOnce(LocationOnceParams),
+    RtcSession(RtcSessionParams),
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentCaptureParams {
+    /// Must equal the `side` of the `document` input named by `into`.
+    pub side: UiDocumentSide,
+}
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum UiLocationPrecision {
+    /// About a kilometre: a city, a district.
+    Coarse,
+    /// As precise as the device gives, for a check-in at a place.
+    Fine,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocationOnceParams {
+    /// The host truncates the fix to this precision before the plugin sees it.
+    pub precision: UiLocationPrecision,
+}
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum UiRtcMedia {
+    Audio,
+    Video,
+    Screen,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RtcSessionParams {
+    /// What the session may carry (`1..=3`, unique).
+    pub media: Vec<UiRtcMedia>,
+}
+impl RtcSessionParams {
+    pub fn is_valid(&self) -> bool {
+        let unique: BTreeSet<_> = self.media.iter().collect();
+        !self.media.is_empty() && unique.len() == self.media.len()
+    }
+}
+/// Key of an operation result that asks the host for a payment
+/// confirmation ([`PaymentConfirmationOrder::from_result`]).
+pub const PAYMENT_CONFIRMATION_KEY: &str = "confirmation";
+/// What a plugin command returns to have the host confirm a payment
+/// (`data.confirmation`). The engine records the order from that result, as
+/// it came back through Core; a host or a bundle names it by `orderId` only.
+/// The host draws the confirmation itself from the recorded fields only and
+/// collects the viewer's credential, which goes to the
+/// [`UiPaymentProvider`]; `operation` (a transient operation of the same
+/// plugin, listed in [`ClientPlugin::transient_operations`]) then receives
+/// `{orderId, ticket}`, never the credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentConfirmationOrder {
+    pub order_id: String,
+    /// Decimal string ([`is_ui_decimal`], up to 18 fraction digits).
+    pub amount: String,
+    pub currency: String,
+    pub payee: String,
+    pub title: String,
+    pub expires_at_ms: i64,
+    pub operation: String,
+}
+impl PaymentConfirmationOrder {
+    /// The order in a successful result `data` of a plugin of
+    /// `plugin_id`: `data.confirmation`, only when valid and its operation
+    /// belongs to the same plugin.
+    pub fn from_result(plugin_id: &str, data: &Value) -> Option<Self> {
+        let order: Self =
+            crate::json::from_value(data.get(PAYMENT_CONFIRMATION_KEY)?.clone()).ok()?;
+        (order.validate().is_ok() && order.operation.starts_with(&format!("{plugin_id}.")))
+            .then_some(order)
+    }
+    pub fn validate(&self) -> Result<()> {
+        if !crate::resource::valid_resource_id(&self.order_id)
+            || !is_ui_decimal(&self.amount, MAX_UI_MONEY_INPUT_SCALE)
+            || self.currency.is_empty()
+            || self.currency.len() > 32
+            || !self
+                .currency
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+            || !valid_text(&self.payee)
+            || !valid_text(&self.title)
+            || self.expires_at_ms <= 0
+            || self.operation.is_empty()
+            || self.operation.len() > 128
+        {
+            return Err(ProtocolError::Denied("invalid payment confirmation order"));
+        }
+        Ok(())
+    }
+    /// Whether the order may still be confirmed at `now_ms`.
+    pub fn is_open(&self, now_ms: i64) -> bool {
+        now_ms < self.expires_at_ms
+    }
 }
 
 #[derive(
@@ -989,7 +1252,7 @@ impl UiDocument {
         if !valid_text(&self.title)
             || self.fields.len() > MAX_UI_FIELDS
             || self.actions.len() > MAX_UI_ACTIONS
-            || self.blocks.len() > MAX_UI_BLOCKS
+            || self.all_blocks().count() > MAX_UI_BLOCKS
             || self.inputs.len() > MAX_UI_INPUTS
         {
             return Err(ProtocolError::Denied("invalid UI document bounds"));
@@ -1088,7 +1351,8 @@ impl UiDocument {
                         action.target,
                         UiActionTarget::Operation { .. }
                             | UiActionTarget::Native {
-                                capability: NativeCapability::Reauthenticate
+                                capability: NativeCapability::Reauthenticate,
+                                ..
                             }
                     ))
             {
@@ -1122,6 +1386,7 @@ impl UiDocument {
                         || !matches!(action.target, UiActionTarget::Operation { .. })
                 })
                 || action.confirm.as_deref().is_some_and(|c| !valid_text(c))
+                || !self.valid_native_target(&action.target)
                 || action.id.is_empty()
                 || action.id.len() > 64
                 || !action
@@ -1140,6 +1405,18 @@ impl UiDocument {
                 return Err(ProtocolError::Denied("invalid UI block"));
             }
         }
+        let (mut images, mut heroes, mut banners) = (0, 0, 0);
+        for block in self.all_blocks() {
+            match block {
+                UiBlock::Image(_) => images += 1,
+                UiBlock::Hero(_) => heroes += 1,
+                UiBlock::Banner(_) => banners += 1,
+                _ => {}
+            }
+        }
+        if images > MAX_UI_IMAGES || heroes > MAX_UI_HEROES || banners > MAX_UI_BANNERS {
+            return Err(ProtocolError::Denied("invalid UI block count"));
+        }
         if self
             .actions
             .iter()
@@ -1149,14 +1426,44 @@ impl UiDocument {
         }
         Ok(())
     }
-    /// The document holds nothing only a console can serve: no protected media
-    /// and no input reference. Clients get neither.
+    /// Every block, those of sections included, in document order (a
+    /// section before the blocks it holds).
+    pub fn all_blocks(&self) -> impl Iterator<Item = &UiBlock> {
+        self.blocks.iter().flat_map(UiBlock::with_children)
+    }
+    /// A native target fits its capability ([`NativeCapability::accepts`])
+    /// and its `into` names an input of this document of a kind the
+    /// capability writes, of the same side for `documentCapture` and the
+    /// same precision for `locationOnce`. Any other target passes.
+    fn valid_native_target(&self, target: &UiActionTarget) -> bool {
+        let UiActionTarget::Native {
+            capability,
+            params,
+            into,
+        } = target
+        else {
+            return true;
+        };
+        capability.accepts(params.as_ref(), into.as_deref())
+            && into.as_deref().is_none_or(|id| {
+                self.inputs.iter().any(|input| {
+                    input.id == id
+                        && capability.into_kinds().contains(&input.kind)
+                        && match params {
+                            Some(NativeParams::DocumentCapture(p)) => input.side == Some(p.side),
+                            Some(NativeParams::LocationOnce(p)) => {
+                                input.precision == Some(p.precision)
+                            }
+                            _ => true,
+                        }
+                })
+            })
+    }
+    /// The document holds no input reference, which only a console can
+    /// serve. (Protected media is checked with the contribution: a page may
+    /// hold it over an owner-scoped read.)
     pub(crate) fn is_client_surface(&self) -> bool {
-        !self
-            .blocks
-            .iter()
-            .any(|block| matches!(block, UiBlock::ProtectedMedia(_)))
-            && self.inputs.iter().all(|input| input.reference.is_none())
+        self.inputs.iter().all(|input| input.reference.is_none())
     }
     /// Inputs that read a [`UiReference`], in order.
     pub fn references(&self) -> impl Iterator<Item = (&str, &UiReference)> {
@@ -1177,9 +1484,10 @@ impl UiDocument {
             _ => None,
         })
     }
-    /// The choices block that owns `action_id`, for its selection input.
+    /// The choices block that owns `action_id`, for its selection input
+    /// (inside a section too).
     pub fn choices_for(&self, action_id: &str) -> Option<&UiChoicesBlock> {
-        self.blocks.iter().find_map(|block| match block {
+        self.all_blocks().find_map(|block| match block {
             UiBlock::Choices(choices) if choices.action.as_deref() == Some(action_id) => {
                 Some(choices)
             }
@@ -1261,27 +1569,67 @@ impl UiDocument {
         if let Some(p) = &mut self.presentation {
             p.actions.retain(|_, id| ids.contains(id));
         }
-        self.blocks.retain_mut(|block| match block {
-            UiBlock::Choices(choices) => {
-                if choices.action.as_ref().is_some_and(|id| !ids.contains(id)) {
-                    choices.action = None;
-                }
-                true
-            }
-            UiBlock::Rows(rows) => {
-                rows.actions.retain(|id| ids.contains(id));
-                keep(&UiActionTarget::Operation {
-                    operation: rows.source.clone(),
-                })
-            }
-            // Without its read a viewer has nothing to do with the block.
-            UiBlock::ProtectedMedia(media) => ids.contains(&media.action),
-            _ => true,
-        });
+        retain_blocks(&mut self.blocks, &ids, keep);
         for translation in self.translations.values_mut() {
             translation.actions.retain(|id, _| ids.contains(id));
         }
     }
+}
+/// [`UiDocument::retain_targets`] over `blocks`, given the action `ids` that
+/// remain: references to other actions go, and so does a block that cannot
+/// do without what went (a rows block whose source `keep` rejects, protected
+/// media without its read, a section left empty).
+fn retain_blocks(
+    blocks: &mut Vec<UiBlock>,
+    ids: &BTreeSet<String>,
+    keep: &mut dyn FnMut(&UiActionTarget) -> bool,
+) {
+    blocks.retain_mut(|block| match block {
+        UiBlock::Choices(choices) => {
+            if choices.action.as_ref().is_some_and(|id| !ids.contains(id)) {
+                choices.action = None;
+            }
+            true
+        }
+        UiBlock::Rows(rows) => {
+            rows.actions.retain(|id| ids.contains(id));
+            keep(&UiActionTarget::Operation {
+                operation: rows.source.clone(),
+            })
+        }
+        // Without its read a viewer has nothing to do with the block.
+        UiBlock::ProtectedMedia(media) => ids.contains(&media.action),
+        UiBlock::Hero(hero) => {
+            hero.actions.retain(|id| ids.contains(id));
+            true
+        }
+        UiBlock::Banner(banner) => {
+            if banner
+                .action_id
+                .as_ref()
+                .is_some_and(|id| !ids.contains(id))
+            {
+                banner.action_id = None;
+            }
+            true
+        }
+        UiBlock::Qr(qr) => {
+            let refused = qr.refresh_operation.as_ref().is_some_and(|operation| {
+                !keep(&UiActionTarget::Operation {
+                    operation: operation.clone(),
+                })
+            });
+            if refused {
+                qr.refresh_operation = None;
+            }
+            true
+        }
+        UiBlock::Section(section) => {
+            retain_blocks(&mut section.blocks, ids, keep);
+            !section.blocks.is_empty()
+        }
+        _ => true,
+    });
 }
 /// A plugin as clients read it in the [`UiCatalog`].
 ///
@@ -1301,8 +1649,13 @@ pub struct ClientPlugin {
     /// metadata from an older Core never grants command-observation authority.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub query_operations: BTreeSet<String>,
-    /// Approved commands whose signed input schema has no command identity.
-    /// Native host flows may invoke only this explicit, non-journal authority.
+    /// Authorized operations only a native host flow may call, never a
+    /// declared action or a bundle command: the operations the signed
+    /// manifest marks `transient` (a `paymentConfirmation` order's
+    /// `operation` must be one), and, for a plugin that declares the
+    /// `reauthenticate` capability, its approved commands whose signed input
+    /// schema has no command identity. Missing from an older Core: no order
+    /// can be confirmed and no reauthentication can run.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub transient_operations: BTreeSet<String>,
     /// The client-visible subset of the tenant configuration
@@ -1326,6 +1679,13 @@ pub fn composer_data(configuration: &Map<String, Value>) -> Value {
     Value::Object(data)
 }
 impl ClientPlugin {
+    /// The catalog entry of the web bundle `id`
+    /// ([`ClientExtensions::web_bundles`]: listed only when a selected
+    /// variant opens it, with `urls`, `files` and the approved bridge
+    /// `permissions`).
+    pub fn web_bundle(&self, id: &str) -> Option<&crate::bundle::WebBundleDecl> {
+        self.extensions.web_bundle(id)
+    }
     /// [`composer_data`] of this plugin's configuration.
     pub fn composer_data(&self) -> Value {
         composer_data(&self.configuration)
@@ -1358,6 +1718,66 @@ pub struct UiCatalog {
     /// nothing. A plugin in neither list resolves as `not_installed`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<UiUnavailablePlugin>,
+    /// Who checks the payment credential a host's payment confirmation
+    /// collects ([`UiPaymentProvider`]); `None` when this deployment names
+    /// none or the viewer cannot reach it, and then no order is confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_provider: Option<UiPaymentProvider>,
+}
+/// The plugin a deployment names (Core configuration, never a manifest) to
+/// hold its users' payment credentials, and the transient operation of it
+/// that checks one.
+///
+/// A host's payment confirmation never hands the credential to the plugin
+/// that asked for the payment. The engine sends it, with the order exactly as
+/// the engine recorded it from that plugin's operation result, to
+/// `operation`: [`PaymentTicketRequest`] in, [`PaymentTicket`] out. The
+/// provider answers with a one-time ticket bound to the order, the viewer and
+/// the asking plugin, and only that ticket reaches the order's own transient
+/// operation (`{orderId, ticket}`). The asking plugin's server redeems the
+/// ticket with the provider before it treats the order as paid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiPaymentProvider {
+    pub plugin_id: String,
+    /// One of the provider's [`ClientPlugin::transient_operations`].
+    pub operation: String,
+}
+/// What the engine sends [`UiPaymentProvider::operation`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentTicketRequest {
+    /// The plugin whose operation returned the order.
+    pub plugin_id: String,
+    pub order_id: String,
+    pub amount: String,
+    pub currency: String,
+    pub payee: String,
+    pub expires_at_ms: i64,
+    /// The host's proof, as the confirmation sheet collected it (at most
+    /// 4 KiB serialized).
+    pub confirmation: Map<String, Value>,
+}
+/// The provider's answer: a ticket the order's transient operation receives
+/// as `ticket`, valid once and until `expires_at_ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentTicket {
+    /// Opaque, `1..=`[`MAX_PAYMENT_TICKET_BYTES`] bytes of `[A-Za-z0-9_-]`.
+    pub ticket: String,
+    pub expires_at_ms: i64,
+}
+/// Longest [`PaymentTicket::ticket`].
+pub const MAX_PAYMENT_TICKET_BYTES: usize = 256;
+impl PaymentTicket {
+    /// Whether the ticket reads as one.
+    pub fn is_valid(ticket: &str) -> bool {
+        !ticket.is_empty()
+            && ticket.len() <= MAX_PAYMENT_TICKET_BYTES
+            && ticket
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
 }
 /// A plugin listed in [`UiCatalog::unavailable`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1376,12 +1796,18 @@ pub enum UiUnavailableReason {
     Disabled,
     /// Not installed for the tenant (or uninstalled).
     NotInstalled,
+    /// This client build cannot show the contribution: its `minClient` is
+    /// above the build, no variant fits the client's descriptor, or the
+    /// client could not read it. The view carries `minBuild` when the
+    /// plugin names one; hosts offer the update when that build exists.
+    UpgradeRequired,
     /// Installed and enabled, but not for this viewer.
     NoPermission,
     /// The plugin does not support this client platform.
     UnsupportedPlatform,
     /// The card's contribution, schema version or document is not one the
-    /// installed version (or this client) understands.
+    /// installed version understands (an upgrade of this client would not
+    /// help: see `upgrade_required`).
     IncompatibleVersion,
     /// The catalog could not be read; the card shows its summary until it can.
     CatalogUnreachable,
@@ -1416,7 +1842,7 @@ impl PluginMessage {
     /// post: `data.message`, only when it is a valid message of that same plugin.
     /// Anything else (absent, malformed, another plugin's card) posts nothing.
     pub fn from_result(plugin_id: &str, data: &Value) -> Option<Self> {
-        let message: Self = serde_json::from_value(data.get("message")?.clone()).ok()?;
+        let message: Self = crate::json::from_value(data.get("message")?.clone()).ok()?;
         (message.plugin_id == plugin_id && message.validate().is_ok()).then_some(message)
     }
     pub fn validate(&self) -> Result<()> {
@@ -1566,6 +1992,10 @@ pub struct ResolvedPluginView {
     /// A page source's approved refresh cadence; absent on inert views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_ms: Option<u32>,
+    /// With `upgrade_required`: the lowest build of this platform that shows
+    /// the contribution, when the plugin names one ([`UiUpgrade::min_build`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_build: Option<u64>,
 }
 impl ResolvedPluginView {
     /// Append the next page of a paged detail, resolved against the same
@@ -1582,6 +2012,8 @@ impl ResolvedPluginView {
     /// fields, actions, menu, inputs, other blocks) stays as on the first
     /// page; `nextCursor` becomes the page's. An unavailable view or page
     /// ends paging without changing the entries or rows.
+    /// [`ShownPluginView::append_page`] does the same to a view a host
+    /// passed back as JSON.
     pub fn append_page(&mut self, page: ResolvedPluginView) {
         if !self.available || !page.available {
             self.next_cursor = None;
@@ -1656,22 +2088,30 @@ impl ResolvedPluginView {
         self.menu_actions.clear();
         self.inputs.clear();
         self.detail = false;
-        for block in &mut self.blocks {
-            match block {
-                ResolvedUiBlock::Choices(choices) => choices.action = None,
-                ResolvedUiBlock::Entries(entries) => entries.more = false,
-                ResolvedUiBlock::ProtectedMedia(media) => media.action = None,
-                ResolvedUiBlock::Rows(rows) => {
-                    rows.actions.clear();
-                    for row in &mut rows.rows {
-                        row.actions.clear();
-                        row.detail_input = None;
-                    }
-                }
-                _ => {}
-            }
-        }
+        read_only_blocks(&mut self.blocks);
         self
+    }
+}
+/// [`ResolvedPluginView::into_read_only`] over `blocks`, sections included.
+fn read_only_blocks(blocks: &mut [ResolvedUiBlock]) {
+    for block in blocks {
+        match block {
+            ResolvedUiBlock::Choices(choices) => choices.action = None,
+            ResolvedUiBlock::Entries(entries) => entries.more = false,
+            ResolvedUiBlock::ProtectedMedia(media) => media.action = None,
+            ResolvedUiBlock::Rows(rows) => {
+                rows.actions.clear();
+                for row in &mut rows.rows {
+                    row.actions.clear();
+                    row.detail_input = None;
+                }
+            }
+            ResolvedUiBlock::Hero(hero) => hero.actions.clear(),
+            ResolvedUiBlock::Banner(banner) => banner.action = None,
+            ResolvedUiBlock::Qr(qr) => qr.refresh_operation = None,
+            ResolvedUiBlock::Section(section) => read_only_blocks(&mut section.blocks),
+            _ => {}
+        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1825,6 +2265,7 @@ pub(crate) fn resolve_document(
         detail: detail.is_some(),
         next_cursor: None,
         refresh_ms: None,
+        min_build: None,
     }
 }
 impl UiContribution {
@@ -1908,6 +2349,24 @@ impl ResolvedPluginView {
     pub fn unavailable_page(reason: UiUnavailableReason) -> Self {
         Self::inert(String::new(), reason)
     }
+    /// The inert view of a card whose contribution needs a newer client:
+    /// its summary, `upgrade_required` and `minBuild`.
+    pub fn upgrade_required(message: &PluginMessage, min_build: Option<u64>) -> Self {
+        let mut view = Self::unavailable(message, UiUnavailableReason::UpgradeRequired);
+        view.min_build = min_build;
+        view
+    }
+    /// The inert view of a page, entry or form that needs a newer client:
+    /// its title (the placeholder's, in `locale`), `upgrade_required` and
+    /// `minBuild` ([`UiContribution::upgrade`]).
+    pub fn upgrade_required_entry(contribution: &UiContribution, locale: &str) -> Self {
+        let mut view = Self::inert(
+            contribution.schema.localized_title(locale).to_owned(),
+            UiUnavailableReason::UpgradeRequired,
+        );
+        view.min_build = contribution.upgrade.as_ref().and_then(|u| u.min_build);
+        view
+    }
     fn inert(title: String, reason: UiUnavailableReason) -> Self {
         Self {
             available: false,
@@ -1922,6 +2381,7 @@ impl ResolvedPluginView {
             detail: false,
             next_cursor: None,
             refresh_ms: None,
+            min_build: None,
         }
     }
 }
@@ -1973,8 +2433,32 @@ impl UiCatalog {
                 context.locale,
                 context.viewer,
             ),
-            Err(reason) => ResolvedPluginView::unavailable(message, reason),
+            Err(reason) => self.unavailable_view(message, reason),
         }
+    }
+    /// The inert view of `message` for `reason`, with the `minBuild` of its
+    /// upgrade placeholder for `upgrade_required`.
+    fn unavailable_view(
+        &self,
+        message: &PluginMessage,
+        reason: UiUnavailableReason,
+    ) -> ResolvedPluginView {
+        if reason != UiUnavailableReason::UpgradeRequired {
+            return ResolvedPluginView::unavailable(message, reason);
+        }
+        let min_build = self
+            .plugins
+            .iter()
+            .find(|p| p.plugin_id == message.plugin_id)
+            .and_then(|p| {
+                p.extensions
+                    .contributions
+                    .iter()
+                    .find(|c| c.id == message.contribution_id)
+            })
+            .and_then(|c| c.upgrade.as_ref())
+            .and_then(|u| u.min_build);
+        ResolvedPluginView::upgrade_required(message, min_build)
     }
     /// The detail view of a message, resolved against the result `data` of the
     /// detail operation ([`Self::detail`]).
@@ -1993,7 +2477,7 @@ impl UiCatalog {
                         UiUnavailableReason::IncompatibleVersion,
                     )
                 }),
-            Err(reason) => ResolvedPluginView::unavailable(message, reason),
+            Err(reason) => self.unavailable_view(message, reason),
         }
     }
     /// Why `message` cannot be rendered in `context`, or `None` when it can:
@@ -2002,6 +2486,9 @@ impl UiCatalog {
     /// - a plugin in `unavailable`: its reason;
     /// - an expired catalog: `catalog_unreachable` (the host reads a fresh one);
     /// - a plugin that does not list the platform: `unsupported_platform`;
+    /// - an upgrade placeholder ([`UiContribution::upgrade`]):
+    ///   `upgrade_required`; an unsupported one ([`UiUpgrade::unsupported`]):
+    ///   `unsupported_platform`;
     /// - an invalid envelope, an unknown contribution, schema version or kind,
     ///   or an invalid document: `incompatible_version`.
     pub fn unavailable_reason(
@@ -2048,6 +2535,11 @@ impl UiCatalog {
                     && c.schema_version == message.schema_version
                     && c.kind == context.kind
             })
+            .map_or(Ok(None), |c| match &c.upgrade {
+                // An upgrade placeholder, or an unsupported one.
+                Some(upgrade) => Err(upgrade.reason()),
+                None => Ok(Some(c)),
+            })?
             .filter(|contribution| {
                 contribution.schema.validate().is_ok()
                     && contribution
@@ -2115,7 +2607,7 @@ impl UiCatalog {
             {
                 return Err(ProtocolError::Denied("UI page unavailable"));
             }
-            UiActionTarget::Native { capability }
+            UiActionTarget::Native { capability, .. }
                 if !native_allowlist.contains(capability)
                     || !p.extensions.native_capabilities.contains(capability) =>
             {
@@ -2165,6 +2657,9 @@ impl UiCatalog {
     ///   `not_installed`; a plugin in `unavailable`: its reason;
     /// - an expired catalog: `catalog_unreachable`;
     /// - a plugin that does not list the platform: `unsupported_platform`;
+    /// - an upgrade placeholder ([`UiContribution::upgrade`]):
+    ///   `upgrade_required` (show [`ResolvedPluginView::upgrade_required_entry`]);
+    ///   an unsupported one ([`UiUpgrade::unsupported`]): `unsupported_platform`;
     /// - no such page, another schema version or an invalid document or
     ///   source: `incompatible_version`;
     /// - a source operation the catalog does not offer the viewer:
@@ -2199,6 +2694,11 @@ impl UiCatalog {
             .contributions
             .iter()
             .find(|c| c.id == page && c.kind == UiContributionKind::Page && c.schema_version == 1)
+            .map_or(Ok(None), |c| match &c.upgrade {
+                // An upgrade placeholder, or an unsupported one.
+                Some(upgrade) => Err(upgrade.reason()),
+                None => Ok(Some(c)),
+            })?
             .filter(|c| {
                 c.schema.validate().is_ok()
                     && c.source.as_ref().is_none_or(|s| s.validate().is_ok())
