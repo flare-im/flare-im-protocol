@@ -1248,7 +1248,13 @@ impl UiDocument {
     pub fn localized_title(&self, locale: &str) -> &str {
         translation_for(&self.translations, locale).map_or(&self.title, |t| &t.title)
     }
+    /// Validate as a client surface ([`UiDocumentLimits::CLIENT`]).
     pub fn validate(&self) -> Result<()> {
+        self.validate_within(UiDocumentLimits::CLIENT)
+    }
+    /// Validate within the bounds of the surface that draws it:
+    /// [`UiDocumentLimits::ADMIN`] for an admin page.
+    pub fn validate_within(&self, limits: UiDocumentLimits) -> Result<()> {
         if !valid_text(&self.title)
             || self.fields.len() > MAX_UI_FIELDS
             || self.actions.len() > MAX_UI_ACTIONS
@@ -1400,7 +1406,7 @@ impl UiDocument {
         }
         let mut owned = BTreeSet::new();
         for block in &self.blocks {
-            block.validate(&self.actions, &self.inputs)?;
+            block.validate(&self.actions, &self.inputs, limits)?;
             if !block.owned_actions().into_iter().all(|id| owned.insert(id)) {
                 return Err(ProtocolError::Denied("invalid UI block"));
             }

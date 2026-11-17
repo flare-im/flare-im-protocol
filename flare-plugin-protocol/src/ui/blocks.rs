@@ -41,10 +41,33 @@ pub const MAX_UI_PEOPLE_AVATARS: u8 = 10;
 pub const MAX_UI_VALUE_LABELS: usize = 32;
 /// Fields of a fields block.
 pub const MAX_UI_BLOCK_FIELDS: usize = 16;
-/// Rows resolved per page, columns and row actions of a rows block.
+/// Rows resolved per page and columns of a rows block.
 pub const MAX_UI_ROWS: usize = 100;
 pub const MAX_UI_COLUMNS: usize = 12;
+/// Row actions of a rows block on a client surface (contributions and cards),
+/// whose mobile renderers lay out a fixed few.
 pub const MAX_UI_ROW_ACTIONS: usize = 4;
+/// Row actions of a rows block on an admin page (`admin.pages`): the console
+/// shows the first few on the row and folds the rest into a menu.
+pub const MAX_ADMIN_UI_ROW_ACTIONS: usize = 8;
+
+/// The bounds of a document that depend on the surface that draws it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiDocumentLimits {
+    /// Row actions of each rows block.
+    pub row_actions: usize,
+}
+
+impl UiDocumentLimits {
+    /// Client surfaces: contributions and cards.
+    pub const CLIENT: Self = Self {
+        row_actions: MAX_UI_ROW_ACTIONS,
+    };
+    /// Admin pages (`admin.pages`), drawn by the console.
+    pub const ADMIN: Self = Self {
+        row_actions: MAX_ADMIN_UI_ROW_ACTIONS,
+    };
+}
 /// Characters of a text block value read from data (newlines kept).
 pub const MAX_UI_TEXT_CHARS: usize = 4000;
 /// Collapsed lines of a text block.
@@ -572,7 +595,8 @@ pub struct UiRowsBlock {
     pub columns: Vec<UiColumn>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_path: Option<String>,
-    /// `0..=4` ids of document actions with operation or page targets. Their
+    /// `0..=4` ids of document actions with operation or page targets
+    /// (`0..=8` on an admin page, [`UiDocumentLimits`]). Their
     /// `hiddenWhen` and declared input read the row; the block owns them. A
     /// page target opens that page with the row's bound input as its
     /// arguments (on an admin page: another admin page of the plugin, the
@@ -1655,7 +1679,12 @@ impl UiBlock {
         }
     }
 
-    pub(crate) fn validate(&self, actions: &[UiAction], inputs: &[UiInput]) -> Result<()> {
+    pub(crate) fn validate(
+        &self,
+        actions: &[UiAction],
+        inputs: &[UiInput],
+        limits: UiDocumentLimits,
+    ) -> Result<()> {
         let ok = match self {
             Self::Text(b) => {
                 text_or_path(&b.text, &b.path)
@@ -1773,7 +1802,7 @@ impl UiBlock {
                     && optional_path(&b.cursor_path)
                     && (!b.group_by_day
                         || b.columns.iter().any(|c| c.format == UiColumnFormat::Time))
-                    && b.actions.len() <= MAX_UI_ROW_ACTIONS
+                    && b.actions.len() <= limits.row_actions
                     && b.actions
                         .iter()
                         .all(|id| ids.insert(id) && row_action(actions, id).is_some())
@@ -1814,7 +1843,7 @@ impl UiBlock {
                         !matches!(
                             child,
                             Self::Section(_) | Self::Rows(_) | Self::ProtectedMedia(_)
-                        ) && child.validate(actions, inputs).is_ok()
+                        ) && child.validate(actions, inputs, limits).is_ok()
                     })
             }
             Self::Stats(b) => {

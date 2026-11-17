@@ -611,6 +611,40 @@ fn a_page_row_action_opens_a_page_with_the_row_as_its_arguments() {
     assert!(native.validate().is_err());
 }
 
+#[test]
+fn a_client_page_row_takes_at_most_four_actions() {
+    let with_row_actions = |count: usize| {
+        let mut manifest = page_manifest();
+        let ids: Vec<String> = (0..count).map(|i| format!("open{i}")).collect();
+        let page = history(&mut manifest);
+        page["schema"]["actions"] = ids
+            .iter()
+            .map(|id| {
+                json!({"id": id, "label": "查看", "input": {"packetId": "/packetId"},
+                       "target": {"kind": "operation", "operation": "example.poll.view"}})
+            })
+            .collect();
+        page["schema"]["blocks"][1]["actions"] = json!(ids);
+        manifest
+    };
+    assert_eq!(MAX_UI_ROW_ACTIONS, 4);
+    assert!(parse(&with_row_actions(MAX_UI_ROW_ACTIONS)).is_ok());
+    let five = with_row_actions(MAX_UI_ROW_ACTIONS + 1);
+    assert!(
+        parse(&five).is_err(),
+        "a contribution keeps the client limit"
+    );
+    // The count is the only thing wrong: an admin page could hold them.
+    let schema: UiDocument = serde_json::from_value(
+        five["clientExtensions"]["contributions"][page_index(&five, "example.poll.history")]
+            ["schema"]
+            .clone(),
+    )
+    .unwrap();
+    assert!(schema.validate().is_err());
+    schema.validate_within(UiDocumentLimits::ADMIN).unwrap();
+}
+
 // ---- value labels ----
 
 #[test]

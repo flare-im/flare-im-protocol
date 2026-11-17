@@ -1245,6 +1245,49 @@ fn admin_actions_open_another_admin_page_with_its_filters() {
 }
 
 #[test]
+fn an_admin_page_row_takes_up_to_eight_actions() {
+    let with_row_actions = |count: usize| {
+        let mut raw = admin_manifest();
+        let ids: Vec<String> = (0..count).map(|i| format!("remove{i}")).collect();
+        let polls = &mut raw["admin"]["pages"][0]["document"];
+        polls["actions"] = ids
+            .iter()
+            .map(|id| {
+                json!({"id": id, "label": "删除", "input": {"pollId": "/pollId"},
+                       "target": {"kind": "operation", "operation": "example.poll.remove"}})
+            })
+            .collect();
+        polls["blocks"][0]["actions"] = json!(ids);
+        raw
+    };
+    assert_eq!(MAX_ADMIN_UI_ROW_ACTIONS, 8);
+    let manifest = parse(&with_row_actions(MAX_ADMIN_UI_ROW_ACTIONS)).unwrap();
+    let page = &manifest.admin.as_ref().unwrap().pages[0];
+    assert_eq!(page.document.rows().unwrap().actions.len(), 8);
+    // Every one of them is offered on a row.
+    let view = page.resolve(
+        &json!({"items": [{"pollId": "p1", "question": "午饭吃什么"}]}),
+        "zh-CN",
+        "staff-1",
+    );
+    let Some(ResolvedUiBlock::Rows(rows)) = view.blocks.first() else {
+        panic!("rows block");
+    };
+    assert_eq!(rows.rows[0].actions.len(), 8);
+    // The same document is too many for a client surface.
+    assert!(page.document.validate().is_err());
+    page.document
+        .validate_within(UiDocumentLimits::ADMIN)
+        .unwrap();
+    // A ninth is refused.
+    assert!(matches!(
+        parse(&with_row_actions(MAX_ADMIN_UI_ROW_ACTIONS + 1)),
+        Err(flare_plugin_protocol::ProtocolError::InvalidManifest { field, reason })
+            if field == "admin" && reason == "invalid page document"
+    ));
+}
+
+#[test]
 fn admin_operations_have_a_separate_bounded_capacity_in_the_contract_and_schema() {
     let with_operations = |count: usize| {
         let mut raw = admin_manifest();

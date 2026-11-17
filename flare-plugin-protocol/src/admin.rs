@@ -38,8 +38,8 @@ use serde_json::Value;
 
 use crate::manifest::{OperationMode, PluginManifest, RiskLevel, UninstallBehavior};
 use crate::ui::{
-    ResolvedPluginView, UiAction, UiActionTarget, UiBlock, UiDetail, UiDocument, UiReference,
-    resolve_document,
+    ResolvedPluginView, UiAction, UiActionTarget, UiBlock, UiDetail, UiDocument, UiDocumentLimits,
+    UiReference, resolve_document,
 };
 use crate::{ProtocolError, Result};
 
@@ -670,8 +670,9 @@ impl PluginAdmin {
     ///   a declared permission, `auditTarget` a pointer, and none of them used
     ///   by a client contribution (an admin operation is never a user one);
     /// - navigation: unique ids, an existing page, a kit icon name;
-    /// - pages: unique ids, a declared permission, a valid document whose
-    ///   rows source and detail call admin operations only; a document action
+    /// - pages: unique ids, a declared permission, a valid document (up to
+    ///   [`crate::ui::MAX_ADMIN_UI_ROW_ACTIONS`] row actions per rows block)
+    ///   whose rows source and detail call admin operations only; a document action
     ///   calls an admin operation or opens another admin page of this plugin
     ///   (no `pluginId`, `form`, `confirm`, `command` or `continuation`, each
     ///   input name one of that page's filter inputs, so no input to a page
@@ -810,8 +811,10 @@ impl PluginAdmin {
                 permission(&page.permission),
                 "page permission must be declared",
             )?;
+            // The console folds row actions past a few into a menu, so an
+            // admin page takes more of them than a client surface.
             page.document
-                .validate()
+                .validate_within(UiDocumentLimits::ADMIN)
                 .map_err(|_| invalid("invalid page document"))?;
             if let Some(detail) = &page.detail {
                 detail

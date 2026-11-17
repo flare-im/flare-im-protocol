@@ -72,3 +72,7 @@
   `continuation`，`input` 的每个键都是目标页的筛选输入（目标页没有行块就不读数据、没有筛选，`input` 只能为空）；
   详情文档的动作仍只能调用管理操作。
   `contractVersion` 仍是 1；用了这种动作的清单要用 `hostVersionRange` 要求带这项改动的平台。
+- 管理页（`admin.pages`）的行块最多 8 个行动作（`ui::MAX_ADMIN_UI_ROW_ACTIONS`，控制台在行上显示前几个，其余收进「更多」）；
+  客户端的贡献页与卡片仍是 4 个（`ui::MAX_UI_ROW_ACTIONS`）。`UiDocument::validate` 按客户端上限检查，
+  管理页文档用 `UiDocument::validate_within(UiDocumentLimits::ADMIN)`。随宿主 1.1.0 发布：
+  行动作超过 4 个的清单要用 `hostVersionRange` 要求 1.1.0 起的平台；`contractVersion` 仍是 1。
