@@ -1107,7 +1107,7 @@ fn the_admin_section_declares_permissions_operations_pages_and_lifecycle() {
     assert!(
         reject(&|a| a["pages"][0]["document"]["actions"][0]["target"] =
             json!({"kind": "page", "page": "example.poll.wallet"})),
-        "an admin row action calls an admin operation, never opens a page"
+        "an admin action opens only another admin page of its plugin"
     );
     assert!(
         reject(&|a| a["pages"][1]["widgets"][0]["source"] = json!("example.poll.remove")),
@@ -1130,6 +1130,99 @@ fn the_admin_section_declares_permissions_operations_pages_and_lifecycle() {
         &|a| a["lifecycle"]["migrations"][0]["from"] = json!("not a range")
     ));
     assert!(reject(&|a| a["extra"] = json!(true)));
+}
+
+#[test]
+fn admin_actions_open_another_admin_page_with_its_filters() {
+    let votes = json!({"id": "votes", "label": "投票记录", "input": {"pollId": "/pollId"},
+                       "target": {"kind": "page", "page": "votes"}});
+    let mut raw = admin_manifest();
+    // `note` is an input of the votes page but not one of its filters.
+    raw["admin"]["pages"].as_array_mut().unwrap().push(json!(
+        {"id": "votes", "kind": "list", "permission": "read", "document": {
+            "title": "投票记录",
+            "inputs": [{"id": "pollId", "kind": "text", "label": "投票"},
+                       {"id": "note", "kind": "text", "label": "备注"}],
+            "blocks": [{"kind": "rows", "source": "example.poll.list", "path": "/items",
+                        "keyPath": "/voteId", "columns": [{"label": "选项", "path": "/option"}],
+                        "filters": ["pollId"]}]
+        }}
+    ));
+    let polls = &mut raw["admin"]["pages"][0]["document"];
+    polls["actions"].as_array_mut().unwrap().push(votes.clone());
+    polls["blocks"][0]["actions"] = json!(["remove", "votes"]);
+    let manifest = parse(&raw).unwrap();
+    let again = parse(&serde_json::to_value(&manifest).unwrap()).unwrap();
+    assert_eq!(again.admin, manifest.admin);
+    // The row's values are bound as the votes page's filters.
+    let view = manifest.admin.as_ref().unwrap().pages[0].resolve(
+        &json!({"items": [{"pollId": "p1", "question": "午饭吃什么"}]}),
+        "zh-CN",
+        "staff-1",
+    );
+    let Some(ResolvedUiBlock::Rows(rows)) = view.blocks.first() else {
+        panic!("rows block");
+    };
+    assert!(rows.rows[0].actions.contains(&ResolvedUiRowAction {
+        id: "votes".into(),
+        input: json!({"pollId": "p1"}),
+    }));
+
+    let refused = |edit: &dyn Fn(&mut Value)| {
+        let mut value = raw.clone();
+        edit(&mut value["admin"]["pages"][0]["document"]["actions"][1]);
+        parse(&value)
+    };
+    let link_refused = |result: Result<PluginManifest, flare_plugin_protocol::ProtocolError>| {
+        matches!(
+            result,
+            Err(flare_plugin_protocol::ProtocolError::InvalidManifest { field, reason })
+                if field == "admin"
+                    && reason == "page actions call admin operations or open another admin page with its filters"
+        )
+    };
+    assert!(
+        link_refused(refused(&|a| a["target"]["page"] = json!("polls"))),
+        "never the page itself"
+    );
+    assert!(
+        link_refused(refused(&|a| a["input"] = json!({"note": "/pollId"}))),
+        "only the target page's filters"
+    );
+    assert!(
+        refused(&|a| a["form"] = json!(["pollId"])).is_err(),
+        "opened without a form"
+    );
+    assert!(
+        link_refused(refused(&|a| a["confirm"] = json!("x"))),
+        "opened without a confirmation"
+    );
+    assert!(
+        link_refused(refused(
+            &|a| a["target"]["pluginId"] = json!("example.other")
+        )),
+        "never another plugin's page"
+    );
+
+    // A detail document calls admin operations only.
+    let in_detail = |action: &Value| {
+        let mut value = raw.clone();
+        let polls = &mut value["admin"]["pages"][0];
+        polls["document"]["actions"].as_array_mut().unwrap().pop();
+        polls["document"]["blocks"][0]["actions"] = json!(["remove"]);
+        polls["detail"] = json!({"operation": "example.poll.list", "input": {"pollId": "/pollId"},
+                                 "document": {"title": "投票详情", "actions": [action]}});
+        parse(&value)
+    };
+    let remove = raw["admin"]["pages"][0]["document"]["actions"][0].clone();
+    assert!(
+        in_detail(&remove).is_ok(),
+        "a detail calls admin operations"
+    );
+    assert!(
+        link_refused(in_detail(&votes)),
+        "a detail never opens a page"
+    );
 }
 
 #[test]

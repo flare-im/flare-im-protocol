@@ -572,10 +572,11 @@ pub struct UiRowsBlock {
     pub columns: Vec<UiColumn>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_path: Option<String>,
-    /// `0..=4` ids of document actions with operation or page targets (an
-    /// admin page's: operation targets only). Their `hiddenWhen` and declared
-    /// input read the row; the block owns them. A page target opens that page
-    /// with the row's bound input as its arguments.
+    /// `0..=4` ids of document actions with operation or page targets. Their
+    /// `hiddenWhen` and declared input read the row; the block owns them. A
+    /// page target opens that page with the row's bound input as its
+    /// arguments (on an admin page: another admin page of the plugin, the
+    /// bound input its filters).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1480,8 +1481,9 @@ fn operation_action<'a>(actions: &'a [UiAction], id: &str) -> Option<&'a UiActio
         .find(|a| a.id == id && matches!(a.target, UiActionTarget::Operation { .. }))
 }
 /// An action a rows block may own: an operation, or a page the row opens with
-/// the row's bound input as its arguments. Never a native capability. Admin
-/// pages admit operation targets only (`admin.pages`).
+/// the row's bound input as its arguments. Never a native capability. On an
+/// admin page (`admin.pages`) the page is another admin page of the plugin and
+/// the bound input its filters.
 fn row_action<'a>(actions: &'a [UiAction], id: &str) -> Option<&'a UiAction> {
     actions.iter().find(|a| {
         a.id == id

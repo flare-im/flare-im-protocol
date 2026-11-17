@@ -38,7 +38,7 @@ use serde_json::Value;
 
 use crate::manifest::{OperationMode, PluginManifest, RiskLevel, UninstallBehavior};
 use crate::ui::{
-    ResolvedPluginView, UiActionTarget, UiBlock, UiDetail, UiDocument, UiReference,
+    ResolvedPluginView, UiAction, UiActionTarget, UiBlock, UiDetail, UiDocument, UiReference,
     resolve_document,
 };
 use crate::{ProtocolError, Result};
@@ -230,8 +230,11 @@ pub struct AdminPage {
     pub kind: AdminPageKind,
     /// One of [`PluginAdmin::permissions`]: needed to see the page.
     pub permission: String,
-    /// Rendered with the generic plugin renderer; every action, rows source
-    /// and the detail call admin operations only.
+    /// Rendered with the generic plugin renderer; the rows source and the
+    /// detail call admin operations. An action calls an admin operation or
+    /// opens another admin page of this plugin, its bound input (a row's
+    /// values) being that page's filters; the detail's actions call admin
+    /// operations only.
     pub document: UiDocument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<UiDetail>,
@@ -635,6 +638,24 @@ impl PluginAdmin {
             .iter()
             .find(|m| semver::VersionReq::parse(&m.from).is_ok_and(|range| range.matches(version)))
     }
+    /// An action of page `from` opening `target`: another of these pages,
+    /// opened as it is (no form, confirmation, command or continuation) with
+    /// the action's bound input as its filters, so each input name is one of
+    /// the target's filter inputs ([`UiDocument::filter_inputs`]).
+    fn opens_admin_page(&self, from: &str, action: &UiAction, target: &str) -> bool {
+        let Some(target) = self.page(target).filter(|page| page.id != from) else {
+            return false;
+        };
+        let filters = target.document.filter_inputs();
+        action.form.is_empty()
+            && action.confirm.is_none()
+            && action.command.is_none()
+            && action.continuation.is_none()
+            && action
+                .input
+                .keys()
+                .all(|name| filters.iter().any(|input| &input.id == name))
+    }
 
     /// Everything the manifest alone decides:
     /// - `contractVersion` is [`ADMIN_CONTRACT_VERSION`]; at most 96 operations
@@ -645,9 +666,13 @@ impl PluginAdmin {
     ///   by a client contribution (an admin operation is never a user one);
     /// - navigation: unique ids, an existing page, a kit icon name;
     /// - pages: unique ids, a declared permission, a valid document whose
-    ///   actions, rows source and detail call admin operations only; `list`
-    ///   has one rows block, `detail`/`form` none, `dashboard` 1..=12 widgets
-    ///   reading admin `query` operations and no rows;
+    ///   rows source and detail call admin operations only; a document action
+    ///   calls an admin operation or opens another admin page of this plugin
+    ///   (no `pluginId`, `form`, `confirm`, `command` or `continuation`, each
+    ///   input name one of that page's filter inputs), a detail action calls
+    ///   an admin operation; `list` has one rows block, `detail`/`form` none,
+    ///   `dashboard` 1..=12 widgets reading admin `query` operations and no
+    ///   rows;
     /// - a protected media block reads through an admin operation that requires
     ///   a reason and names its audit target;
     /// - `settings.uiHints` keys are `configurationSchema` properties (`fields`
@@ -792,9 +817,10 @@ impl PluginAdmin {
                     "page detail must call an admin operation",
                 )?;
             }
-            let documents = std::iter::once(&page.document)
-                .chain(page.detail.as_ref().map(|detail| &detail.document));
-            for document in documents {
+            // Only the page document opens pages; the detail calls operations.
+            let documents = std::iter::once((&page.document, true))
+                .chain(page.detail.as_ref().map(|detail| (&detail.document, false)));
+            for (document, opens_pages) in documents {
                 ensure(
                     document.actions.iter().all(|action| {
                         action.command.as_ref().is_none_or(|command| {
@@ -806,9 +832,13 @@ impl PluginAdmin {
                 ensure(
                     document.actions.iter().all(|a| match &a.target {
                         UiActionTarget::Operation { operation } => admin_ops.contains(operation),
+                        UiActionTarget::Page {
+                            page: target,
+                            plugin_id: None,
+                        } => opens_pages && self.opens_admin_page(&page.id, a, target),
                         _ => false,
                     }),
-                    "page actions must call admin operations",
+                    "page actions call admin operations or open another admin page with its filters",
                 )?;
                 ensure(
                     document
