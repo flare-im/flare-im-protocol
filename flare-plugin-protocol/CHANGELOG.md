@@ -69,5 +69,6 @@
   `NativeCapability`、`UiUnavailableReason` 做穷尽匹配的下游代码需要补上新分支。
 - 管理页（`admin.pages`）文档里的动作除了调用管理操作，还可以打开本插件的另一个管理页：
   `{"kind":"page","page":"<pageId>"}`，不带 `pluginId`，不是自己，不带 `form`、`confirm`、`command`、
-  `continuation`，`input` 的每个键都是目标页的筛选输入；详情文档的动作仍只能调用管理操作。
+  `continuation`，`input` 的每个键都是目标页的筛选输入（目标页没有行块就不读数据、没有筛选，`input` 只能为空）；
+  详情文档的动作仍只能调用管理操作。
   `contractVersion` 仍是 1；用了这种动作的清单要用 `hostVersionRange` 要求带这项改动的平台。

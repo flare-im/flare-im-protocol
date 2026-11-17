@@ -233,8 +233,8 @@ pub struct AdminPage {
     /// Rendered with the generic plugin renderer; the rows source and the
     /// detail call admin operations. An action calls an admin operation or
     /// opens another admin page of this plugin, its bound input (a row's
-    /// values) being that page's filters; the detail's actions call admin
-    /// operations only.
+    /// values) being that page's filters (none for a page without a rows
+    /// block); the detail's actions call admin operations only.
     pub document: UiDocument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<UiDetail>,
@@ -641,12 +641,17 @@ impl PluginAdmin {
     /// An action of page `from` opening `target`: another of these pages,
     /// opened as it is (no form, confirmation, command or continuation) with
     /// the action's bound input as its filters, so each input name is one of
-    /// the target's filter inputs ([`UiDocument::filter_inputs`]).
+    /// the target's filter inputs ([`UiDocument::filter_inputs`]). A target
+    /// without a rows block reads nothing and takes no filters: the link
+    /// binds no input.
     fn opens_admin_page(&self, from: &str, action: &UiAction, target: &str) -> bool {
         let Some(target) = self.page(target).filter(|page| page.id != from) else {
             return false;
         };
-        let filters = target.document.filter_inputs();
+        let filters = target
+            .document
+            .rows()
+            .map_or_else(Vec::new, |_| target.document.filter_inputs());
         action.form.is_empty()
             && action.confirm.is_none()
             && action.command.is_none()
@@ -669,10 +674,10 @@ impl PluginAdmin {
     ///   rows source and detail call admin operations only; a document action
     ///   calls an admin operation or opens another admin page of this plugin
     ///   (no `pluginId`, `form`, `confirm`, `command` or `continuation`, each
-    ///   input name one of that page's filter inputs), a detail action calls
-    ///   an admin operation; `list` has one rows block, `detail`/`form` none,
-    ///   `dashboard` 1..=12 widgets reading admin `query` operations and no
-    ///   rows;
+    ///   input name one of that page's filter inputs, so no input to a page
+    ///   without a rows block), a detail action calls an admin operation;
+    ///   `list` has one rows block, `detail`/`form` none, `dashboard` 1..=12
+    ///   widgets reading admin `query` operations and no rows;
     /// - a protected media block reads through an admin operation that requires
     ///   a reason and names its audit target;
     /// - `settings.uiHints` keys are `configurationSchema` properties (`fields`

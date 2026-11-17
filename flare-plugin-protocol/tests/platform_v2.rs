@@ -1203,6 +1203,25 @@ fn admin_actions_open_another_admin_page_with_its_filters() {
         )),
         "never another plugin's page"
     );
+    // A page without a rows block reads nothing and takes no filters: a link
+    // to it binds no input, not even one its document declares for a form.
+    let to_form = |input: Value| {
+        let mut value = raw.clone();
+        value["admin"]["pages"].as_array_mut().unwrap().push(json!(
+            {"id": "notes", "kind": "form", "permission": "read", "document": {
+                "title": "备注", "inputs": [{"id": "note", "kind": "text", "label": "备注"}]
+            }}
+        ));
+        let link = &mut value["admin"]["pages"][0]["document"]["actions"][1];
+        link["target"]["page"] = json!("notes");
+        link["input"] = input;
+        parse(&value)
+    };
+    assert!(
+        link_refused(to_form(json!({"note": "/pollId"}))),
+        "a page without rows takes no filters"
+    );
+    assert!(to_form(json!({})).is_ok(), "a link without input opens it");
 
     // A detail document calls admin operations only.
     let in_detail = |action: &Value| {
