@@ -1475,7 +1475,9 @@ pub struct ResolvedUiRowAction {
     pub input: Value,
     /// The action's form starts from the row: by input id, the value the row
     /// holds at the input's `defaultPath` when it fits the input as the page
-    /// resolves it. Other inputs start from their resolved `default`.
+    /// resolves it. An input the row holds no such value for starts from its
+    /// `default` as resolved over the page data, which reads the same
+    /// `defaultPath` there: name a row form's paths apart from the page's.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub values: Map<String, Value>,
 }

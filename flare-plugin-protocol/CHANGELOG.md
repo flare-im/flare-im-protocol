@@ -76,3 +76,7 @@
   客户端的贡献页与卡片仍是 4 个（`ui::MAX_UI_ROW_ACTIONS`）。`UiDocument::validate` 按客户端上限检查，
   管理页文档用 `UiDocument::validate_within(UiDocumentLimits::ADMIN)`。随宿主 1.1.0 发布：
   行动作超过 4 个的清单要用 `hostVersionRange` 要求 1.1.0 起的平台；`contractVersion` 仍是 1。
+- 行块里每个行动作多了 `values`（`ResolvedUiRowAction::values`，为空时不出现）：行动作的表单从这一行开始，
+  按输入 id 给出该行在输入的 `defaultPath` 处、符合页面解析后输入的值；行里没有的输入仍从按页面数据解析的
+  `default` 开始，所以行表单的路径要和页面自己的字段分开命名。按结构体字面量构造 `ResolvedUiRowAction` 的代码要补上
+  `values`。随宿主 1.1.0 发布；旧宿主不带这个字段，表单照旧空白打开。
