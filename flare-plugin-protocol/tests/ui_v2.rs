@@ -717,6 +717,54 @@ fn admin_page_rows_bind_row_actions_detail_and_cursor() {
     assert!(!detail.detail);
 }
 
+#[test]
+fn a_row_action_form_starts_from_its_row() {
+    let document = doc(json!({"title": "群签到",
+    "inputs": [
+        {"id": "label", "kind": "text", "label": "备注名", "defaultPath": "/label"},
+        {"id": "keywords", "kind": "options", "label": "本群关键字", "max": 5,
+         "defaultPath": "/ownKeywords"},
+        {"id": "amount", "kind": "text", "label": "每次奖励金额", "defaultPath": "/ownAmount"},
+        {"id": "allow", "kind": "select", "label": "本群能否签到", "default": "allow",
+         "defaultPath": "/allow",
+         "choices": [{"value": "allow", "label": "能"}, {"value": "deny", "label": "不能"}]}
+    ],
+    "blocks": [{"kind": "rows", "source": "x.op.list", "path": "/items", "keyPath": "/id",
+                "columns": [{"label": "群", "path": "/label"}], "actions": ["set", "reset"]}],
+    "actions": [
+        {"id": "set", "label": "设置", "target": op("set"), "input": {"id": "/id"},
+         "form": ["label", "keywords", "amount", "allow"]},
+        {"id": "reset", "label": "恢复", "target": op("reset"), "input": {"id": "/id"}}
+    ]}));
+    let view = resolve(
+        document,
+        json!({"label": "应用", "items": [
+            {"id": "g1", "label": "一群", "ownKeywords": ["打卡"], "ownAmount": "50", "allow": "deny"},
+            {"id": "g2", "ownAmount": 7, "allow": "maybe", "ownKeywords": null}
+        ]}),
+    );
+    let ResolvedUiBlock::Rows(rows) = only_block(&view) else {
+        panic!()
+    };
+    // The form opens over the row's own values, never the page's.
+    assert_eq!(
+        serde_json::to_value(&rows.rows[0].actions).unwrap(),
+        json!([
+            {"id": "set", "input": {"id": "g1"}, "values": {
+                "label": "一群", "keywords": ["打卡"], "amount": "50", "allow": "deny"}},
+            {"id": "reset", "input": {"id": "g1"}}
+        ])
+    );
+    // A value the row lacks or that does not fit is left to the input's default.
+    assert_eq!(
+        serde_json::to_value(&rows.rows[1].actions[0]).unwrap(),
+        json!({"id": "set", "input": {"id": "g2"}})
+    );
+    // The page's own form still reads the page.
+    assert_eq!(view.inputs[0].default, Some(json!("应用")));
+    assert_eq!(view.inputs[3].default, Some(json!("allow")));
+}
+
 fn edited(edit: impl Fn(&mut Value)) -> flare_plugin_protocol::Result<PluginManifest> {
     let mut raw: Value =
         serde_json::from_slice(include_bytes!("fixtures/plugin-ui-v2-manifest.json")).unwrap();

@@ -1166,6 +1166,7 @@ fn admin_actions_open_another_admin_page_with_its_filters() {
     assert!(rows.rows[0].actions.contains(&ResolvedUiRowAction {
         id: "votes".into(),
         input: json!({"pollId": "p1"}),
+        values: Default::default(),
     }));
 
     let refused = |edit: &dyn Fn(&mut Value)| {

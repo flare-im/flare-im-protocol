@@ -1473,6 +1473,11 @@ pub struct ResolvedUiRowAction {
     /// The action's declared input bound from the row: the operation input,
     /// or for a page target the arguments of the page it opens.
     pub input: Value,
+    /// The action's form starts from the row: by input id, the value the row
+    /// holds at the input's `defaultPath` when it fits the input as the page
+    /// resolves it. Other inputs start from their resolved `default`.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub values: Map<String, Value>,
 }
 
 // ---- validation ----
@@ -1937,6 +1942,8 @@ pub(crate) struct Scope<'a> {
     pub viewer: &'a str,
     pub translation: Option<&'a UiTranslation>,
     pub actions: &'a [UiAction],
+    /// The document's declared inputs, for the forms of row actions.
+    pub inputs: &'a [UiInput],
     /// The contribution's detail while it is offered: declared and not
     /// hidden by its `hiddenWhen`. None inside a detail document.
     pub detail: Option<&'a UiDetail>,
@@ -2625,6 +2632,22 @@ impl UiRowsBlock {
             .iter()
             .filter_map(|id| row_action(scope.actions, id))
             .collect();
+        // Each row action's form inputs as the page resolves them, with the
+        // path a row holds an input's initial value at.
+        let forms: Vec<Vec<(UiInput, &str)>> = row_actions
+            .iter()
+            .map(|action| {
+                action
+                    .form
+                    .iter()
+                    .filter_map(|id| {
+                        let input = scope.inputs.iter().find(|input| input.id == *id)?;
+                        let path = input.default_path.as_deref()?;
+                        Some((input.resolve(scope.data, scope.translation), path))
+                    })
+                    .collect()
+            })
+            .collect();
         let rows = raw_rows
             .iter()
             .take(MAX_UI_ROWS)
@@ -2665,11 +2688,18 @@ impl UiRowsBlock {
                     .collect();
                 let actions = row_actions
                     .iter()
-                    .filter(|action| visible(action, row, scope.viewer))
-                    .filter_map(|action| {
+                    .zip(&forms)
+                    .filter(|(action, _)| visible(action, row, scope.viewer))
+                    .filter_map(|(action, form)| {
                         Some(ResolvedUiRowAction {
                             id: action.id.clone(),
                             input: bind_inputs(&action.input, row).ok()?,
+                            values: form
+                                .iter()
+                                .filter_map(|(input, path)| {
+                                    Some((input.id.clone(), input.initial_at(row, Some(path))?))
+                                })
+                                .collect(),
                         })
                     })
                     .collect();

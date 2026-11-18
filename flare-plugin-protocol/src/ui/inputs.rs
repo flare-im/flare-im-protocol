@@ -550,7 +550,8 @@ pub struct UiInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Value>,
     /// Initial value read from the card data instead (for editing an existing
-    /// entry); falls back to `default` when absent or of the wrong type.
+    /// entry); falls back to `default` when absent or of the wrong type. A row
+    /// action's form reads it from the row (`ResolvedUiRowAction::values`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_path: Option<String>,
     /// select: `1..=1024` choices. options: `0..=1024`; when present the items
@@ -876,20 +877,23 @@ impl UiInput {
         for choice in &mut input.choices {
             choice.label = translate(translation, &choice.label);
         }
-        if let Some(value) = self
-            .default_path
-            .as_deref()
-            .and_then(|path| data.pointer(path))
-            .filter(|value| {
-                !value.is_null()
-                    && (input.default_fits(value)
-                        || (self.kind == UiInputKind::Members && input.check(value).is_ok()))
-            })
-        {
-            input.default = Some(value.clone());
+        if let Some(value) = input.initial_at(data, self.default_path.as_deref()) {
+            input.default = Some(value);
         }
         input.default_path = None;
         input
+    }
+
+    /// The value `data` holds at `path` when it is a usable initial value of
+    /// this input as resolved.
+    pub(crate) fn initial_at(&self, data: &Value, path: Option<&str>) -> Option<Value> {
+        data.pointer(path?)
+            .filter(|value| {
+                !value.is_null()
+                    && (self.default_fits(value)
+                        || (self.kind == UiInputKind::Members && self.check(value).is_ok()))
+            })
+            .cloned()
     }
 
     /// Check one submitted value; returns the value to forward.

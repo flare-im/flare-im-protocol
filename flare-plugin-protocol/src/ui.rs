@@ -2213,6 +2213,7 @@ pub(crate) fn resolve_document(
         viewer,
         translation,
         actions: &document.actions,
+        inputs: &document.inputs,
         detail,
     };
     ResolvedPluginView {

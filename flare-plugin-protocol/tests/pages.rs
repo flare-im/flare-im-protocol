@@ -420,7 +420,8 @@ fn a_page_resolves_against_its_source_result_with_badges_and_paging() {
         rows.rows[0].actions,
         vec![ResolvedUiRowAction {
             id: "open".into(),
-            input: json!({"packetId": "p1"})
+            input: json!({"packetId": "p1"}),
+            values: Default::default(),
         }]
     );
     // The page-level action is a page target; row actions stay in the rows.
@@ -545,11 +546,13 @@ fn a_page_row_action_opens_a_page_with_the_row_as_its_arguments() {
         vec![
             ResolvedUiRowAction {
                 id: "open".into(),
-                input: json!({"packetId": "p1"})
+                input: json!({"packetId": "p1"}),
+                values: Default::default(),
             },
             ResolvedUiRowAction {
                 id: "packet".into(),
-                input: json!({"packetId": "p1"})
+                input: json!({"packetId": "p1"}),
+                values: Default::default(),
             }
         ]
     );
