@@ -60,6 +60,10 @@
 - 宽容解析入口 `ui::lenient::prepare_contribution`；每个块可带 `required`。
 - 操作描述 `ownerScoped`：用户页面上的 `protected-media` 只经本人范围的 `query` 读取。
 - `ui::PaymentConfirmationOrder`：操作结果 `data.confirmation` 的待确认订单。
+- 拒绝说明 `rejection`：明确拒绝的 `error_message` 可以是 JSON 对象，键是语言（`^[a-z]{2,3}(-[A-Z]{2})?$`，
+  `1..=4` 个，`MAX_MESSAGE_LOCALES`），值是 `1..=300` 字（`MAX_MESSAGE_CHARS`）、没有控制字符的文字；
+  其他形状一律视为没有说明。`parse_message` 校验形状，`message_for` 先取请求的语言、再取 `zh-CN`。
+  只由读的一方校验；不改清单与票据结构。
 
 ### 变更
 

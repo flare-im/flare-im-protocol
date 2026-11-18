@@ -16,6 +16,7 @@ pub mod lifecycle;
 pub mod manifest;
 pub mod package;
 pub mod registry;
+pub mod rejection;
 pub mod resource;
 pub mod runtime;
 pub mod service;
