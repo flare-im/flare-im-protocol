@@ -366,8 +366,8 @@ fn a_page_action_carries_its_bound_input_for_the_console() {
         "en-US",
         "staff",
     );
-    // Null is kept for the platform to judge; a path the page lacks is left out.
-    let bound = json!({"missionId": "m1", "baseRevision": null});
+    // Null, or a path the page lacks, is null for the platform to judge.
+    let bound = json!({"missionId": "m1", "baseRevision": null, "stepKey": null});
     assert_eq!(json!(view.actions[0].values), bound);
     assert_eq!(json!(view.menu_actions[0].values), bound);
     let add = serde_json::to_value(&view.actions[1]).unwrap();
@@ -378,4 +378,20 @@ fn a_page_action_carries_its_bound_input_for_the_console() {
          "values": {"missionId": "m1"}}
     ]}));
     assert!(declared.validate().is_err());
+}
+
+#[test]
+fn page_action_values_past_the_input_limit_are_left_out() {
+    let page = page(json!({"title": "Page", "fields": [], "actions": [
+        {"id": "save", "label": "Save", "target": {"kind": "operation", "operation": "op.save"},
+         "input": {"note": "/note"}}
+    ]}));
+    let values = |note: String| {
+        let view = page.resolve(&json!({"note": note}), "en-US", "staff");
+        view.actions[0].values.clone()
+    };
+    let limit = flare_plugin_protocol::ui::MAX_UI_ACTION_INPUT_BYTES;
+    // `{"note":"…"}` adds 11 bytes around the text.
+    assert_eq!(values("a".repeat(limit - 11)).len(), 1);
+    assert!(values("a".repeat(limit - 10)).is_empty());
 }

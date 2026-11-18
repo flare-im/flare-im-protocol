@@ -255,7 +255,10 @@ impl AdminPage {
             let values: Map<String, Value> = action
                 .input
                 .iter()
-                .filter_map(|(name, path)| Some((name.clone(), data.pointer(path)?.clone())))
+                .map(|(name, path)| {
+                    let value = data.pointer(path).cloned().unwrap_or(Value::Null);
+                    (name.clone(), value)
+                })
                 .collect();
             if serde_json::to_vec(&values).is_ok_and(|v| v.len() <= MAX_UI_ACTION_INPUT_BYTES) {
                 action.values = values;

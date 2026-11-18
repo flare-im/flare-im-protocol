@@ -81,6 +81,7 @@
   `default` 开始，所以行表单的路径要和页面自己的字段分开命名。按结构体字面量构造 `ResolvedUiRowAction` 的代码要补上
   `values`。随宿主 1.1.0 发布；旧宿主不带这个字段，表单照旧空白打开。
 - 管理页解析后的页面动作（`actions` 与 `menuActions`）多了 `values`（`UiAction::values`，为空时不出现，
-  只由 `admin::AdminPage::resolve` 给出）：按输入名给出页面数据在 `input` 各路径处的值，null 照留，路径不存在的不给；
-  控制台没有页面数据，把它原样作为动作的 `input` 发回。清单里声明 `values` 的动作被拒绝。按结构体字面量构造
+  只由 `admin::AdminPage::resolve` 给出）：按输入名给出页面数据在 `input` 各路径处的值，路径不存在时为 null；
+  控制台没有页面数据，把它原样作为动作的 `input` 发回。平台把 null 当作未传交给操作，除非操作入参 schema 根上的
+  `required` 列出了它（那时拒绝）；缺名字的入参照旧拒绝。清单里声明 `values` 的动作被拒绝。按结构体字面量构造
   `UiAction` 的代码要补上 `values`。随宿主 1.1.0 发布；旧宿主上绑定页面数据的页面动作仍被拒绝。

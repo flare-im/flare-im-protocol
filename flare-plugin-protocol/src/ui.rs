@@ -450,8 +450,9 @@ pub struct UiAction {
     pub input: BTreeMap<String, String>,
     /// Resolved admin page actions only ([`crate::admin::AdminPage::resolve`];
     /// never declared): by input name, the page data at its `input` path, null
-    /// kept and a missing path left out. The console holds no page data and
-    /// sends these back as the action's input.
+    /// where the page holds none. The console holds no page data and sends
+    /// these back as the action's input. A null reaches the operation as absent
+    /// unless the root `required` of its input schema lists it (then refused).
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub values: Map<String, Value>,
     /// Presentation only: the action is omitted when any condition matches. The
