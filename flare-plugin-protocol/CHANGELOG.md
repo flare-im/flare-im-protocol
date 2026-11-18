@@ -80,3 +80,7 @@
   按输入 id 给出该行在输入的 `defaultPath` 处、符合页面解析后输入的值；行里没有的输入仍从按页面数据解析的
   `default` 开始，所以行表单的路径要和页面自己的字段分开命名。按结构体字面量构造 `ResolvedUiRowAction` 的代码要补上
   `values`。随宿主 1.1.0 发布；旧宿主不带这个字段，表单照旧空白打开。
+- 管理页解析后的页面动作（`actions` 与 `menuActions`）多了 `values`（`UiAction::values`，为空时不出现，
+  只由 `admin::AdminPage::resolve` 给出）：按输入名给出页面数据在 `input` 各路径处的值，null 照留，路径不存在的不给；
+  控制台没有页面数据，把它原样作为动作的 `input` 发回。清单里声明 `values` 的动作被拒绝。按结构体字面量构造
+  `UiAction` 的代码要补上 `values`。随宿主 1.1.0 发布；旧宿主上绑定页面数据的页面动作仍被拒绝。

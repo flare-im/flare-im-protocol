@@ -448,6 +448,12 @@ pub struct UiAction {
     pub target: UiActionTarget,
     #[serde(default)]
     pub input: BTreeMap<String, String>,
+    /// Resolved admin page actions only ([`crate::admin::AdminPage::resolve`];
+    /// never declared): by input name, the page data at its `input` path, null
+    /// kept and a missing path left out. The console holds no page data and
+    /// sends these back as the action's input.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub values: Map<String, Value>,
     /// Presentation only: the action is omitted when any condition matches. The
     /// plugin still authorizes every invocation; hiding is never a permission.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1338,7 +1344,7 @@ impl UiDocument {
         }
         let mut ids = BTreeSet::new();
         for action in &self.actions {
-            if !valid_bindings(&action.input) {
+            if !valid_bindings(&action.input) || !action.values.is_empty() {
                 return Err(ProtocolError::Denied("invalid UI action bindings"));
             }
             if action.hidden_when.len() > 4 || !action.hidden_when.iter().all(UiCondition::is_valid)

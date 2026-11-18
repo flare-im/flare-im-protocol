@@ -34,12 +34,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::manifest::{OperationMode, PluginManifest, RiskLevel, UninstallBehavior};
 use crate::ui::{
-    ResolvedPluginView, UiAction, UiActionTarget, UiBlock, UiDetail, UiDocument, UiDocumentLimits,
-    UiReference, resolve_document,
+    MAX_UI_ACTION_INPUT_BYTES, ResolvedPluginView, UiAction, UiActionTarget, UiBlock, UiDetail,
+    UiDocument, UiDocumentLimits, UiReference, resolve_document,
 };
 use crate::{ProtocolError, Result};
 
@@ -246,8 +246,22 @@ pub struct AdminPage {
 impl AdminPage {
     /// The page resolved against its rows source result (`{}` before the
     /// first read), the way the console's generic plugin renderer shows it.
+    /// Each page action carries its bound input as `values`
+    /// ([`UiAction::values`]), left out when it exceeds
+    /// [`MAX_UI_ACTION_INPUT_BYTES`].
     pub fn resolve(&self, data: &Value, locale: &str, viewer: &str) -> ResolvedPluginView {
-        resolve_document(&self.document, data, locale, viewer, self.detail.as_ref())
+        let mut view = resolve_document(&self.document, data, locale, viewer, self.detail.as_ref());
+        for action in view.actions.iter_mut().chain(&mut view.menu_actions) {
+            let values: Map<String, Value> = action
+                .input
+                .iter()
+                .filter_map(|(name, path)| Some((name.clone(), data.pointer(path)?.clone())))
+                .collect();
+            if serde_json::to_vec(&values).is_ok_and(|v| v.len() <= MAX_UI_ACTION_INPUT_BYTES) {
+                action.values = values;
+            }
+        }
+        view
     }
     /// The detail document resolved against one page of the detail operation's
     /// result (with `nextCursor` while a paged detail has more).

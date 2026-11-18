@@ -347,3 +347,35 @@ fn translated_hints_carry_label_description_and_option_labels() {
         json!({"group": "voting"})
     );
 }
+
+#[test]
+fn a_page_action_carries_its_bound_input_for_the_console() {
+    let edit = |placement: &str| {
+        json!({"id": format!("edit-{placement}"), "label": "Edit", "placement": placement,
+               "target": {"kind": "operation", "operation": "op.edit"},
+               "input": {"missionId": "/missionId", "baseRevision": "/baseRevision",
+                         "stepKey": "/stepKey"}})
+    };
+    let page = page(json!({"title": "Page", "fields": [], "actions": [
+        edit("buttons"), edit("menu"),
+        {"id": "add", "label": "Add", "target": {"kind": "operation", "operation": "op.add"}}
+    ]}));
+    page.document.validate().unwrap();
+    let view = page.resolve(
+        &json!({"missionId": "m1", "baseRevision": null}),
+        "en-US",
+        "staff",
+    );
+    // Null is kept for the platform to judge; a path the page lacks is left out.
+    let bound = json!({"missionId": "m1", "baseRevision": null});
+    assert_eq!(json!(view.actions[0].values), bound);
+    assert_eq!(json!(view.menu_actions[0].values), bound);
+    let add = serde_json::to_value(&view.actions[1]).unwrap();
+    assert!(add.get("values").is_none());
+    // A declaration never carries resolved values.
+    let declared = document(json!({"title": "Page", "fields": [], "actions": [
+        {"id": "add", "label": "Add", "target": {"kind": "operation", "operation": "op.add"},
+         "values": {"missionId": "m1"}}
+    ]}));
+    assert!(declared.validate().is_err());
+}
