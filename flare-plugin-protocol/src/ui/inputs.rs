@@ -778,7 +778,10 @@ impl UiInput {
             (Textarea, Value::String(s)) => s.chars().count() <= max && multi_line(s),
             (Number, Value::Number(n)) => self.number_in_range(n),
             (Toggle, Value::Bool(_)) => true,
-            (Select, Value::String(s)) => self.is_choice(s),
+            // A declared default must be one of the listed choices, also before they are read.
+            (Select, Value::String(s)) => {
+                (self.choices_path.is_none() || !self.choices.is_empty()) && self.is_choice(s)
+            }
             (Datetime, Value::Number(n)) => n.as_i64().is_some_and(|v| v >= 0),
             (File | Image | Document, Value::Object(_)) => {
                 crate::json::from_value::<UiFileReference>(value.clone())
@@ -808,9 +811,11 @@ impl UiInput {
         })
     }
 
-    /// A referenced value cannot be listed here: only its shape is checked.
+    /// A referenced value, or one of choices still to be read from `choicesPath`
+    /// (the declared input, not resolved over page data), cannot be listed here:
+    /// only its shape is checked; the plugin checks the value itself.
     fn is_choice(&self, value: &str) -> bool {
-        if self.reference.is_some() {
+        if self.reference.is_some() || (self.choices_path.is_some() && self.choices.is_empty()) {
             return !value.is_empty() && value.len() <= 128 && single_line(value);
         }
         self.choices.iter().any(|c| c.value == value)

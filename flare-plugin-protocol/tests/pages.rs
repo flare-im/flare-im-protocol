@@ -852,6 +852,35 @@ fn dynamic_selects_can_start_empty_without_a_fictitious_fallback_value() {
 }
 
 #[test]
+fn a_declared_dynamic_select_checks_only_the_shape_until_its_choices_are_read() {
+    let mut value = page_manifest();
+    let i = page_index(&value, "example.poll.wallet");
+    value["clientExtensions"]["contributions"][i]["schema"]["inputs"] = json!([{"id":"wallet","kind":"select","label":"Wallet","required":true,"choicesPath":"/wallets"}]);
+    value["clientExtensions"]["contributions"][i]["schema"]["actions"] = json!([{"id":"transfer","label":"Send","form":["wallet"],"target":{"kind":"operation","operation":"example.poll.transfer"}}]);
+    let manifest = parse(&value).unwrap();
+    let schema = &manifest.client_extensions.contributions[i].schema;
+    let action = &schema.actions[0];
+    // A host that validates against the declared inputs (no page data) has no choices to list.
+    let declared = |wallet: Value| schema.validate_form(action, &json!({ "wallet": wallet }));
+    assert!(declared(json!("primary")).is_ok());
+    assert!(declared(json!("x".repeat(128))).is_ok());
+    for bad in [json!(""), json!("a\nb"), json!("x".repeat(129)), json!(1)] {
+        assert!(declared(bad.clone()).is_err(), "{bad}");
+    }
+    // Resolved over the page data, the value must be one of the choices read there.
+    let data = json!({"wallets":[{"value":"primary","label":"Primary"}]});
+    assert!(
+        schema
+            .validate_form_over(action, &data, &json!({"wallet":"foreign"}))
+            .is_err()
+    );
+    // A declared default is still refused while there are no choices to hold it.
+    value["clientExtensions"]["contributions"][i]["schema"]["inputs"][0]["default"] =
+        json!("primary");
+    assert!(parse(&value).is_err());
+}
+
+#[test]
 fn password_fields_have_no_prefill_and_never_enter_durable_commands() {
     let mut value = page_manifest();
     let i = page_index(&value, "example.poll.wallet");
