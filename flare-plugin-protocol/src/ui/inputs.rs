@@ -780,7 +780,8 @@ impl UiInput {
             (Toggle, Value::Bool(_)) => true,
             // A declared default must be one of the listed choices, also before they are read.
             (Select, Value::String(s)) => {
-                (self.choices_path.is_none() || !self.choices.is_empty()) && self.is_choice(s)
+                self.choices.iter().any(|c| &c.value == s)
+                    || (self.reference.is_some() && self.is_choice(s))
             }
             (Datetime, Value::Number(n)) => n.as_i64().is_some_and(|v| v >= 0),
             (File | Image | Document, Value::Object(_)) => {
@@ -812,10 +813,11 @@ impl UiInput {
     }
 
     /// A referenced value, or one of choices still to be read from `choicesPath`
-    /// (the declared input, not resolved over page data), cannot be listed here:
-    /// only its shape is checked; the plugin checks the value itself.
+    /// (the declared input, not resolved over page data, whatever fallback
+    /// choices it lists), cannot be listed here: only its shape is checked; the
+    /// plugin checks the value itself.
     fn is_choice(&self, value: &str) -> bool {
-        if self.reference.is_some() || (self.choices_path.is_some() && self.choices.is_empty()) {
+        if self.reference.is_some() || self.choices_path.is_some() {
             return !value.is_empty() && value.len() <= 128 && single_line(value);
         }
         self.choices.iter().any(|c| c.value == value)
@@ -1111,5 +1113,47 @@ pub fn validate_form_values(
         Ok(output)
     } else {
         Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_select_with_fallback_choices_checks_a_declared_value_by_shape() {
+        let input: UiInput = serde_json::from_value(serde_json::json!({
+            "id": "wallet", "kind": "select", "label": "Wallet", "choicesPath": "/wallets",
+            "choices": [{"value": "none", "label": "Unavailable"}]
+        }))
+        .unwrap();
+        assert!(input.validate().is_ok());
+        // Declared, before the choices are read: any value of a choice's shape.
+        for value in ["none", "primary"] {
+            assert!(input.check(&Value::from(value)).is_ok(), "{value}");
+        }
+        assert_eq!(
+            input.check(&Value::from("a\nb")),
+            Err(UiFormIssue::NotAChoice)
+        );
+        // A declared default is still one of the listed choices.
+        assert!(input.default_fits(&Value::from("none")));
+        assert!(!input.default_fits(&Value::from("primary")));
+        // Resolved, only the choices read from the data, else the fallback.
+        let read = input.resolve(
+            &serde_json::json!({"wallets": [{"value": "primary", "label": "Primary"}]}),
+            None,
+        );
+        assert!(read.check(&Value::from("primary")).is_ok());
+        assert_eq!(
+            read.check(&Value::from("none")),
+            Err(UiFormIssue::NotAChoice)
+        );
+        let unread = input.resolve(&serde_json::json!({}), None);
+        assert!(unread.check(&Value::from("none")).is_ok());
+        assert_eq!(
+            unread.check(&Value::from("primary")),
+            Err(UiFormIssue::NotAChoice)
+        );
     }
 }

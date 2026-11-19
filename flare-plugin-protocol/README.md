@@ -136,8 +136,10 @@ explicit test fixture supplies one.
 A definite rejection carries its `error_code`, and its `error_message` may
 explain it to staff in several languages: a JSON object of 1 to 4 locale
 tags (`zh-CN`, `en-US`, matching `^[a-z]{2,3}(-[A-Z]{2})?$`), each mapped to
-1 to 300 characters of plain text without control characters, for example
-`{"en-US":"Cannot delete.","zh-CN":"不能删除。"}`. A reader shows the
+1 to 300 characters of plain text without control characters, format
+characters (bidirectional controls, zero-width characters) or line and
+paragraph separators, and at most 1024 bytes as a whole, what Core forwards,
+for example `{"en-US":"Cannot delete.","zh-CN":"不能删除。"}`. A reader shows the
 requested locale, else `zh-CN`, else no explanation; an `error_message` of
 any other shape, such as `plugin command rejected`, is no explanation.
 `rejection::parse_message` checks the shape and `rejection::message_for`

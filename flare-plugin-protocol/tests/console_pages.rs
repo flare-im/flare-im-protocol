@@ -381,6 +381,29 @@ fn a_page_action_carries_its_bound_input_for_the_console() {
 }
 
 #[test]
+fn values_written_into_a_declaration_never_reach_a_resolved_view() {
+    let forged = json!({"note": "forged"});
+    let declared = json!({"title": "Page", "fields": [], "actions": [
+        {"id": "save", "label": "Save", "target": {"kind": "operation", "operation": "op.save"},
+         "input": {"note": "/note"}, "values": forged},
+        {"id": "add", "label": "Add", "target": {"kind": "operation", "operation": "op.add"},
+         "values": forged}
+    ]});
+    let page: AdminPage = serde_json::from_value(json!({
+        "id": "page", "kind": "detail", "permission": "read", "document": declared,
+        "detail": {"operation": "op.get", "input": {"id": "/id"}, "document": declared}
+    }))
+    .unwrap();
+    let limit = flare_plugin_protocol::ui::MAX_UI_ACTION_INPUT_BYTES;
+    // Too long to bind, so the page leaves the bound values out.
+    let view = page.resolve(&json!({"note": "a".repeat(limit)}), "en-US", "staff");
+    assert!(view.actions.iter().all(|action| action.values.is_empty()));
+    // A detail binds none.
+    let detail = page.resolve_detail(&json!({}), "en-US", "staff").unwrap();
+    assert!(detail.actions.iter().all(|action| action.values.is_empty()));
+}
+
+#[test]
 fn page_action_values_past_the_input_limit_are_left_out() {
     let page = page(json!({"title": "Page", "fields": [], "actions": [
         {"id": "save", "label": "Save", "target": {"kind": "operation", "operation": "op.save"},

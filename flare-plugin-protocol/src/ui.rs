@@ -2169,6 +2169,8 @@ pub(crate) fn resolve_fields(
 pub(crate) fn resolve_action(action: &UiAction, translation: Option<&UiTranslation>) -> UiAction {
     let mut action = action.clone();
     action.hidden_when.clear();
+    // Only `admin::AdminPage::resolve` binds them; a declaration never carries any.
+    action.values.clear();
     if let Some(label) = translation.and_then(|t| t.actions.get(&action.id)) {
         action.label = label.clone();
     }

@@ -61,7 +61,9 @@
 - 操作描述 `ownerScoped`：用户页面上的 `protected-media` 只经本人范围的 `query` 读取。
 - `ui::PaymentConfirmationOrder`：操作结果 `data.confirmation` 的待确认订单。
 - 拒绝说明 `rejection`：明确拒绝的 `error_message` 可以是 JSON 对象，键是语言（`^[a-z]{2,3}(-[A-Z]{2})?$`，
-  `1..=4` 个，`MAX_MESSAGE_LOCALES`），值是 `1..=300` 字（`MAX_MESSAGE_CHARS`）、没有控制字符的文字；
+  `1..=4` 个，`MAX_MESSAGE_LOCALES`），值是 `1..=300` 字（`MAX_MESSAGE_CHARS`）、没有控制字符、格式字符
+  （bidi 嵌入/覆盖/隔离符、零宽字符、字节序标记、标签字符，与审计原因同一组）与行段分隔符的文字；整个对象至多
+  1024 字节（`MAX_MESSAGE_BYTES`，Core 只转发这么长的说明，两种语言各 300 个汉字就已超过）；
   其他形状一律视为没有说明。`parse_message` 校验形状，`message_for` 先取请求的语言、再取 `zh-CN`。
   只由读的一方校验；不改清单与票据结构。
 
@@ -87,5 +89,11 @@
 - 管理页解析后的页面动作（`actions` 与 `menuActions`）多了 `values`（`UiAction::values`，为空时不出现，
   只由 `admin::AdminPage::resolve` 给出）：按输入名给出页面数据在 `input` 各路径处的值，路径不存在时为 null；
   控制台没有页面数据，把它原样作为动作的 `input` 发回。平台把 null 当作未传交给操作，除非操作入参 schema 根上的
-  `required` 列出了它（那时拒绝）；缺名字的入参照旧拒绝。清单里声明 `values` 的动作被拒绝。按结构体字面量构造
+  `required` 列出了它（那时拒绝）；缺名字的入参照旧拒绝。清单里声明 `values` 的动作被拒绝，解析时也丢掉声明里的
+  `values`，只有 `AdminPage::resolve` 给出。按结构体字面量构造
   `UiAction` 的代码要补上 `values`。随宿主 1.1.0 发布；旧宿主上绑定页面数据的页面动作仍被拒绝。
+- 行动作的入参按同一规则交给操作：行里没有的输入（null）当作未传，除非操作入参 schema 根上的 `required` 列出了它；
+  以前平台一律拒绝带 null 的行动作。
+- 声明了 `choicesPath` 的下拉输入（不论有没有列出兜底的 `choices`）在按声明的文档校验表单时（没有页面数据，
+  如平台的管理页）只按形状检查值：非空、单行、至多 128 字节，不再只认兜底选项。按页面数据解析后的输入仍只认读到的
+  选项，声明的 `default` 仍须是列出的选项之一。宿主不再核对这类值是否在选项里，插件必须自己再校验。
