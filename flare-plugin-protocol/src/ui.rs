@@ -789,6 +789,8 @@ pub enum NativeCapability {
     SelectImage,
     SelectFile,
     Camera,
+    /// Scan one QR code with a host-owned camera or image picker.
+    ScanCode,
     Microphone,
     ClipboardWrite,
     /// Host-owned verification. Secrets remain in an ephemeral host flow.
@@ -817,6 +819,7 @@ impl NativeCapability {
         Self::SelectImage,
         Self::SelectFile,
         Self::Camera,
+        Self::ScanCode,
         Self::Microphone,
         Self::ClipboardWrite,
         Self::Reauthenticate,
@@ -834,6 +837,7 @@ impl NativeCapability {
             Self::SelectImage => "selectImage",
             Self::SelectFile => "selectFile",
             Self::Camera => "camera",
+            Self::ScanCode => "scanCode",
             Self::Microphone => "microphone",
             Self::ClipboardWrite => "clipboardWrite",
             Self::Reauthenticate => "reauthenticate",
@@ -857,7 +861,7 @@ impl NativeCapability {
     /// Whether a declared action may target the capability with `params` and
     /// `into`: `documentCapture` and `locationOnce` take their parameters and
     /// an `into`; `rtcSession` takes its parameters; the others take none;
-    /// `paymentConfirmation` is never a declared target.
+    /// `paymentConfirmation` and `scanCode` are never declared targets.
     pub fn accepts(self, params: Option<&NativeParams>, into: Option<&str>) -> bool {
         let into_ok = match into {
             None => !self.needs_into(),
@@ -865,7 +869,7 @@ impl NativeCapability {
         };
         into_ok
             && match (self, params) {
-                (Self::PaymentConfirmation, _) => false,
+                (Self::PaymentConfirmation | Self::ScanCode, _) => false,
                 (Self::DocumentCapture, Some(NativeParams::DocumentCapture(_))) => true,
                 (Self::LocationOnce, Some(NativeParams::LocationOnce(_))) => true,
                 (Self::RtcSession, Some(NativeParams::RtcSession(p))) => p.is_valid(),
@@ -884,6 +888,7 @@ impl NativeCapability {
         matches!(
             self,
             Self::PaymentConfirmation
+                | Self::ScanCode
                 | Self::DocumentCapture
                 | Self::LocationOnce
                 | Self::RtcSession

@@ -985,6 +985,30 @@ pub struct HostCapabilityParams {
     pub params: Option<Value>,
 }
 
+/// A QR code captured by the host. The wire carries a format and bounded plain text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeScanResult {
+    pub format: BridgeScanFormat,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum BridgeScanFormat {
+    Qr,
+}
+
+/// The value returned by `host.capability`; the requested capability determines its shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum HostCapabilityResult {
+    File(crate::ui::UiFileReference),
+    Scan(BridgeScanResult),
+    Location { location: crate::ui::UiLocationValue },
+    Operation { data: Value },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PeopleResolveParams {
