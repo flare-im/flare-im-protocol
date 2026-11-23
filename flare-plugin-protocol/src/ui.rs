@@ -852,7 +852,7 @@ impl NativeCapability {
     pub fn into_kinds(self) -> &'static [UiInputKind] {
         match self {
             Self::SelectImage | Self::Camera => &[UiInputKind::Image, UiInputKind::File],
-            Self::SelectFile => &[UiInputKind::File],
+            Self::SelectFile | Self::Microphone => &[UiInputKind::File],
             Self::DocumentCapture => &[UiInputKind::Document],
             Self::LocationOnce => &[UiInputKind::Location],
             _ => &[],
@@ -889,6 +889,7 @@ impl NativeCapability {
             self,
             Self::PaymentConfirmation
                 | Self::ScanCode
+                | Self::Microphone
                 | Self::DocumentCapture
                 | Self::LocationOnce
                 | Self::RtcSession
