@@ -5,6 +5,18 @@
 
 ## 未发布
 
+### 插件体验交接（K1，都是可选字段，旧清单与旧订单解析不变）
+
+- `UiDocument.errors`：文档按插件的拒绝码（`[A-Z][A-Z0-9_]*`，≤64 字节，≤32 个）声明给查看者的话，经 `texts`
+  翻译；`UiDocument::refusal_text(code, locale)`；`is_refusal_code`。引擎把拒绝结果的 `errorCode` 换成这句话交给宿主。
+- `UiInput.help`：字段下方的说明（经 `texts` 翻译，同占位的长度限制），占位只写示例（R6）。
+- `UiPageTransition.run`：落地页加载后宿主执行一次的动作 id（只在该次导航的首次加载，且是无表单、无确认、未禁用的
+  operation 动作）；与 `actionId` 互斥；导航结果顶层带 `run`。清单校验：目标页在本插件时必须声明该动作。
+- `PaymentConfirmationOrder.requestedBy`：付款所为的插件 id（如钱包订单替红包付款），宿主「由 X 发起」用它。
+- `UiMoneyFormat.currencyPath` → `ResolvedUiMoney.currency`：金额的币种代码（≤32 个字母数字或 `_.-`，不合格的不带）。
+- 金额（`money`）的最小单位值可带显式 `+`（记账行的收入，R10），解析后的文字与 `ResolvedUiMoney.minor` 保留它；只有
+  符号没有数字的值照旧按原文显示。
+
 ### Web 包（L3）
 
 - `bundle`：`WebBundleDecl`（Manifest `clientExtensions.webBundles`，`id`、`sha256`（小写十六进制、无前缀）、`size`、
@@ -27,6 +39,31 @@
   按字段顺序写成的数组被拒绝（`invalid type: sequence, expected struct …`）。`kind` 标签枚举的变体经它读取。
 - `ui::ShownPluginView`：宿主传回的视图（`previous`）按 JSON 保留，翻页只追加条目与行，结果与
   `ResolvedPluginView::append_page` 相同；客户端不再把解析后的视图读回类型。
+
+### UI 词汇版本 3
+
+在版本 2 之上新增（插件体验，设计见 flare-im-design `docs/plugin-experience.md`）：
+
+- 块：`result`（`statePath` + `values`（`1..=32` 个 `{label, tone}`）+ 可选 `amountPath`、`format`、
+  `descriptionPath`），每文档至多 1 个；解析为 `{state, title, tone, unmapped?, amount?, format?, description?}`。
+- 字段：`fields[].values` 与 `rows.columns[].values` 的取值可写 `{label, tone}`（`ui::UiValueLabel`，字符串形态照旧）；
+  动作可选 `group`（`common` | `records`）与 `icon`（kit 图标名）。三者都只管呈现。
+- 解析结果：字段与单元格带 `tone`（取值声明了色调时）；取值不在插件声明的枚举里时带 `unmapped: true`
+  （文本仍是原值，供旧 kit 显示；新 kit 显示「未知状态」）。字段与列的取值表含带色调的取值才算枚举，纯文字表
+  仍可只给自由文本的部分取值起名，其余照原样显示；`status` 块、徽标、时间线状态与 `result` 有取值表即是枚举。
+- 动作可选 `disabledWhen`（`0..=4` 个条件，读法同 `hiddenWhen`，`hiddenWhen` 先判）与 `disabledReason`
+  （二者同有同无；原因按界面文字校验，经 `texts` 翻译）。解析后的动作只在条件成立时带 `disabledReason`，
+  kit 见到它即画禁用键并在键下写原因（设计 R2.5）；只管呈现，插件仍自行拒绝调用。`rows` 块拥有的行动作不得声明。
+- 付款确认订单 `PaymentConfirmationOrder` 可选 `shortfall`（差额，十进制字符串，校验同 `amount`，须大于 0）与
+  `topUp`（`page` 目标，可带 `pluginId`）：宿主据此画余额不足态（确认键禁用、写差额、「去充值」打开 `topUp`，设计 4.3）。
+  引擎按记录的订单原样交给宿主的 `confirmPayment` 请求。只认旧字段的引擎（`deny_unknown_fields`）读不出带这两个字段的订单。
+- 页签：`page` 贡献可选 `tabs`（`manifest::UiContribution::tabs`，`2..=4` 个 `ui::UiPageTab {page, label}`），
+  列出本插件的同级页面（本页在内，每页声明同一组页签，标签经 `texts` 翻译）；解析后的页面视图带
+  `tabs: [{page, label, selected}]`（`ui::ResolvedUiPageTab`），kit 在页头下画分段控件，选中即以该页替换当前页
+  （不新增返回层级，参数照旧）。只管呈现，不跨变体改变。宿主传回的已显示视图可带 `tabs`。
+- 记录行图标：`rows` 块可选 `icon`（kit 图标名，校验同动作 `icon`），解析结果原样带出；kit 在页面列表每行前画
+  36 圆底图标，并按记录行（同 5.8 账单行）排版：第一列为行尾的值、带色调的列为值下方的标签，第二列为标题，其余列为标题下一行（设计 R2.3）。
+- 旧清单原样有效：没有新字段的文档解析结果与之前相同，只多出缺省为假的 `unmapped`（不序列化）。
 
 ### UI 词汇版本 2
 

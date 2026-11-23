@@ -308,6 +308,20 @@ impl BundleManifest {
         if self.bridge != decl.bridge {
             return Err(BundleError::DeclarationMismatch("bridge"));
         }
+        // A staff presentation receives only its authorized page model. All staff writes
+        // stay in the console's audited action path, with its permission and MFA checks.
+        if manifest
+            .admin
+            .as_ref()
+            .is_some_and(|admin| admin.page_bundles.values().any(|id| id == &self.id))
+            && !(self.operations.is_empty()
+                && self.permissions.is_empty()
+                && self.capabilities.is_empty())
+        {
+            return Err(BundleError::InvalidBundleManifest(
+                "staff pages cannot request app bridge permissions, operations or native capabilities",
+            ));
+        }
         let user_operations = manifest.user_operation_ids();
         for operation in &self.operations {
             if !user_operations.contains(operation) {

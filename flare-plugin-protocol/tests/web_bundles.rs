@@ -217,6 +217,46 @@ fn a_catalog_entry_has_https_mirrors_and_an_https_files_base() {
     assert!(!refused(&|e| e.bridge = BRIDGE_VERSION + 1));
 }
 
+#[test]
+fn staff_pages_admit_only_separate_presentation_bundles() {
+    let mut raw = manifest_value();
+    let mut staff = decl();
+    staff.id = "staff".into();
+    raw["clientExtensions"]["webBundles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(staff));
+    raw["admin"]["pageBundles"] = json!({"polls":"staff"});
+    let manifest = parse(&raw).unwrap();
+    let mut payload = json!({"id":"staff","bridge":1});
+    bundle_manifest(&payload)
+        .unwrap()
+        .validate_for(&staff, &manifest)
+        .unwrap();
+    for (field, val) in [
+        ("permissions", "storage"),
+        ("operations", "example.poll.list"),
+        ("capabilities", "selectImage"),
+    ] {
+        payload[field] = json!([val]);
+        assert!(
+            bundle_manifest(&payload)
+                .unwrap()
+                .validate_for(&staff, &manifest)
+                .is_err()
+        );
+        payload[field] = json!([]);
+    }
+    for binding in [
+        json!({"polls":"dashboard"}),
+        json!({"unknown":"staff"}),
+        json!({"polls":"absent"}),
+    ] {
+        raw["admin"]["pageBundles"] = binding;
+        assert!(parse(&raw).is_err());
+    }
+}
+
 // ---- bundle.json ----
 
 #[test]

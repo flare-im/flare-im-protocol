@@ -85,6 +85,22 @@ pub struct UiMoneyFormat {
     /// `0..=18`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<u8>,
+    /// The currency code beside the amount (`CNY`, an asset's code): hosts
+    /// write the amount with it (docs/plugin-experience.md R10, a symbol in
+    /// front where the currency has one, else the code after the number).
+    /// A value that is no code (`1..=32` of letters, digits, `_`, `.`, `-`)
+    /// is left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency_path: Option<String>,
+}
+
+/// A currency code as a money format reads one ([`UiMoneyFormat::currency_path`]).
+fn currency_code(text: String) -> Option<String> {
+    (text.len() <= 32
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)))
+    .then_some(text)
 }
 
 /// Labels of an enumerated value (`1..=64`, keys `1..=64` bytes), translated
@@ -193,13 +209,17 @@ kind_tagged! {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedUiMoney {
-    /// The amount in minor units, as sent.
+    /// The amount in minor units, as sent: digits with an optional leading
+    /// `-`, or `+` where the plugin marks money in; the text keeps the sign.
     pub minor: String,
     /// Absent: the value is still `minor`; the host may scale it by `assetId`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset_id: Option<String>,
+    /// The currency code the amount is in ([`UiMoneyFormat::currency_path`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -265,13 +285,21 @@ fn minor_text(raw: &str, scale: u8) -> String {
     if scale == 0 {
         return raw.to_owned();
     }
-    let (sign, digits) = raw.strip_prefix('-').map_or(("", raw), |d| ("-", d));
+    let (sign, digits) = signed(raw);
     let padded = format!("{digits:0>width$}", width = scale + 1);
     let (whole, fraction) = padded.split_at(padded.len() - scale);
     format!("{sign}{whole}.{fraction}")
 }
+/// A minor amount's sign and digits: `-` for money out, an explicit `+` for
+/// money in (a ledger line, docs/plugin-experience.md R10), kept in front.
+fn signed(raw: &str) -> (&str, &str) {
+    match raw.as_bytes().first() {
+        Some(b'-' | b'+') => raw.split_at(1),
+        _ => ("", raw),
+    }
+}
 fn is_minor(raw: &str) -> bool {
-    let digits = raw.strip_prefix('-').unwrap_or(raw);
+    let (_, digits) = signed(raw);
     !digits.is_empty()
         && digits.len() <= MAX_UI_MINOR_DIGITS
         && digits.bytes().all(|b| b.is_ascii_digit())
@@ -304,7 +332,7 @@ impl UiFieldFormat {
                 (f.asset_path.is_some() || f.scale_path.is_some() || f.scale.is_some())
                     && !(f.scale.is_some() && f.scale_path.is_some())
                     && f.scale.is_none_or(|s| s <= MAX_UI_MONEY_SCALE)
-                    && [&f.asset_path, &f.scale_path]
+                    && [&f.asset_path, &f.scale_path, &f.currency_path]
                         .into_iter()
                         .all(|p| p.as_deref().is_none_or(valid_path))
             }
@@ -350,6 +378,11 @@ impl UiFieldFormat {
                         minor: raw.to_owned(),
                         scale,
                         asset_id: f.asset_path.as_deref().and_then(|p| text_at(data, p)),
+                        currency: f
+                            .currency_path
+                            .as_deref()
+                            .and_then(|p| text_at(data, p))
+                            .and_then(currency_code),
                     })),
                 )
             }

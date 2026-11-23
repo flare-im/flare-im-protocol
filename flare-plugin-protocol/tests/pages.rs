@@ -396,7 +396,8 @@ fn a_page_resolves_against_its_source_result_with_badges_and_paging() {
         entries.items[0].badge,
         Some(ResolvedUiBadge {
             text: "Received".into(),
-            tone: UiTone::Success
+            tone: UiTone::Success,
+            unmapped: false,
         }),
         "mapped, translated through texts, with its tone"
     );
@@ -404,9 +405,10 @@ fn a_page_resolves_against_its_source_result_with_badges_and_paging() {
         entries.items[1].badge,
         Some(ResolvedUiBadge {
             text: "bonus".into(),
-            tone: UiTone::Neutral
+            tone: UiTone::Neutral,
+            unmapped: true,
         }),
-        "an unmapped value is shown as sent"
+        "an unmapped value is sent raw and marked, for kits to say unknown"
     );
     assert_eq!(entries.items[2].badge, None, "no value, no badge");
     let ResolvedUiBlock::Rows(rows) = &view.blocks[1] else {
@@ -757,6 +759,27 @@ fn durable_page_commands_and_cross_plugin_continuations_are_bounded_and_page_onl
 }
 
 #[test]
+fn a_continuation_runs_an_action_its_own_target_page_declares() {
+    let mut value = page_manifest();
+    let i = page_index(&value, "example.poll.wallet");
+    let action = |continuation: Value| json!({"id":"submit","label":"Submit","target":{"kind":"operation","operation":"example.poll.transfer"},"command":{"slot":"example.poll.workflow"},"continuation":continuation});
+    value["clientExtensions"]["contributions"][i]["schema"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(action(json!({"page":"example.poll.history","run":"open"})));
+    assert!(parse(&value).is_ok(), "the history page declares open");
+    let mut missing = value.clone();
+    missing["clientExtensions"]["contributions"][i]["schema"]["actions"][1] =
+        action(json!({"page":"example.poll.history","run":"pay"}));
+    assert!(parse(&missing).is_err(), "no pay on the history page");
+    // Another plugin's page is the host's to check on landing.
+    let mut other = value.clone();
+    other["clientExtensions"]["contributions"][i]["schema"]["actions"][1] =
+        action(json!({"pluginId":"example.other","page":"example.other.checkout","run":"pay"}));
+    assert!(parse(&other).is_ok());
+}
+
+#[test]
 fn observe_page_commands_require_a_declared_query_without_a_new_intent() {
     let mut value = page_manifest();
     let i = page_index(&value, "example.poll.wallet");
@@ -925,4 +948,50 @@ fn append_both(
     shown.append_page(page.clone());
     view.append_page(page);
     assert_eq!(shown.into_value(), serde_json::to_value(&*view).unwrap());
+}
+
+#[test]
+fn page_columns_map_values_to_words_with_a_tone_and_mark_the_rest() {
+    let mut manifest = page_manifest();
+    history(&mut manifest)["schema"]["blocks"][1]["columns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"label": "状态", "path": "/status", "values": {
+            "open": {"label": "未领完", "tone": "info"},
+            "done": "已领完"}}));
+    let manifest = parse(&manifest).unwrap();
+    let catalog = catalog(&manifest);
+    let (_, page) = catalog
+        .page("example.poll", "example.poll.history", &context())
+        .unwrap();
+    let data = ledger(
+        json!([
+            {"id": "l1", "kind": "claim", "amountText": "+¥1.00", "status": "open"},
+            {"id": "l2", "kind": "claim", "amountText": "+¥2.00", "status": "done"},
+            {"id": "l3", "kind": "claim", "amountText": "+¥3.00", "status": "lost"},
+            {"id": "l4", "kind": "claim", "amountText": "+¥4.00"}
+        ]),
+        None,
+    );
+    let view = page.resolve_page(&data, "zh-CN", "u1").unwrap();
+    let ResolvedUiBlock::Rows(rows) = &view.blocks[1] else {
+        panic!("rows second")
+    };
+    let status: Vec<_> = rows
+        .rows
+        .iter()
+        .map(|row| {
+            let cell = &row.cells[2];
+            (cell.text.as_str(), cell.tone, cell.unmapped)
+        })
+        .collect();
+    assert_eq!(
+        status,
+        [
+            ("未领完", Some(UiTone::Info), false),
+            ("已领完", None, false),
+            ("lost", Some(UiTone::Neutral), true),
+            ("", None, false),
+        ]
+    );
 }

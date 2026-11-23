@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 /// descriptors existed ([`base_vocabulary`]); every batch of new names adds
 /// one and is listed in the changelog. Logs and caches read it; selection
 /// looks at the sets only.
-pub const UI_VOCABULARY_VERSION: u32 = 2;
+pub const UI_VOCABULARY_VERSION: u32 = 3;
 /// Serialized size of a descriptor.
 pub const MAX_UI_DESCRIPTOR_BYTES: usize = 4096;
 /// Names in one set of a descriptor or a vocabulary.

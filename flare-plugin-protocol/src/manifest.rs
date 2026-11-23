@@ -396,6 +396,13 @@ pub struct UiContribution {
     /// paging (see [`crate::ui::UiPageSource`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::ui::UiPageSource>,
+    /// page only: `2..=4` sibling pages of this plugin shown as tabs (this
+    /// page among them, each declaring the same tabs), such as received and
+    /// sent records. Presentation only; resolved as
+    /// [`crate::ui::ResolvedPluginView::tabs`]. The same for every variant.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = crate::ui::MAX_UI_PAGE_TABS))]
+    pub tabs: Vec<crate::ui::UiPageTab>,
     /// scan-handler only: the approved route, read-only resolver and pages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan: Option<UiScanHandler>,
@@ -1009,6 +1016,26 @@ impl PluginManifest {
                 "clientExtensions.id",
                 "must belong to plugin",
             )?;
+            let tabs = &contribution.tabs;
+            let tab_pages: BTreeSet<&str> = tabs.iter().map(|tab| tab.page.as_str()).collect();
+            ensure(
+                tabs.is_empty()
+                    || (contribution.kind == UiContributionKind::Page
+                        && (crate::ui::MIN_UI_PAGE_TABS..=crate::ui::MAX_UI_PAGE_TABS)
+                            .contains(&tabs.len())
+                        && tab_pages.len() == tabs.len()
+                        && tab_pages.contains(contribution.id.as_str())
+                        && tabs.iter().all(|tab| {
+                            crate::ui::valid_text(&tab.label)
+                                && self.client_extensions.contributions.iter().any(|c| {
+                                    c.id == tab.page
+                                        && c.kind == UiContributionKind::Page
+                                        && c.tabs == *tabs
+                                })
+                        })),
+                "clientExtensions.contributions.tabs",
+                "page only: 2..=4 sibling pages of this plugin, this one among them, each declaring the same tabs",
+            )?;
             for (expanded, _) in contribution.expansions() {
                 self.validate_presentation(&expanded)?;
             }
@@ -1110,10 +1137,21 @@ impl PluginManifest {
                 opened.insert(id);
             }
         }
+        if let Some(admin) = &self.admin {
+            for (page, bundle) in &admin.page_bundles {
+                ensure(
+                    admin.page(page).is_some()
+                        && ids.contains(bundle.as_str())
+                        && opened.insert(bundle),
+                    "admin.pageBundles",
+                    "a staff bundle belongs to one declared staff page and cannot be opened by an app variant",
+                )?;
+            }
+        }
         ensure(
             opened.len() == ids.len(),
             "clientExtensions.webBundles",
-            "a declared web bundle is opened by no variant",
+            "a declared web bundle is opened by no app variant or staff page",
         )
     }
 
@@ -1787,6 +1825,17 @@ impl PluginManifest {
                                     .any(|c| c.id == t.page && c.kind == UiContributionKind::Page)),
                         "clientExtensions.actions.continuation",
                         "target page must be declared",
+                    )?;
+                    // Another plugin's page is checked by the host when it lands.
+                    ensure(
+                        t.run.as_deref().is_none_or(|run| {
+                            target != self.plugin_id
+                                || self.client_extensions.contributions.iter().any(|c| {
+                                    c.id == t.page && c.schema.actions.iter().any(|a| a.id == run)
+                                })
+                        }),
+                        "clientExtensions.actions.continuation.run",
+                        "the action to run must be declared on the target page",
                     )?;
                 }
             }

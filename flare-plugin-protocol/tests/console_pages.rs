@@ -41,6 +41,26 @@ fn a_money_field_keeps_plain_text_and_scales_from_its_source() {
 }
 
 #[test]
+fn a_money_value_keeps_an_explicit_plus_for_money_in() {
+    let field = fields(
+        json!({"label": "Amount", "path": "/amount",
+               "format": {"kind": "money", "scalePath": "/scale", "currencyPath": "/currency"}}),
+        json!({"amount": "+1205", "scale": 2, "currency": "CNY"}),
+    );
+    assert_eq!(field.value, "+12.05");
+    let Some(ResolvedUiFormat::Money(money)) = field.format else {
+        panic!("money format");
+    };
+    assert_eq!(money.minor, "+1205");
+    // A sign alone is no amount.
+    let field = fields(
+        json!({"label": "Amount", "path": "/amount", "format": {"kind": "money", "scale": 2}}),
+        json!({"amount": "+"}),
+    );
+    assert_eq!((field.value.as_str(), field.format), ("+", None));
+}
+
+#[test]
 fn a_money_field_without_a_scale_leaves_the_asset_to_the_host() {
     let field = fields(
         json!({"label": "Amount", "path": "/amount",

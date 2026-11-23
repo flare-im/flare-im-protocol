@@ -527,6 +527,11 @@ pub struct UiInput {
     pub required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+    /// What the value should be, said under the field (translated through
+    /// `texts`, like the label): the rule a placeholder must not carry, so
+    /// the placeholder stays an example (docs/plugin-experience.md R6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
     /// Characters: text (`1..=1024`, default 256), textarea (`1..=8000`,
     /// default 2000), options per item (`1..=256`, default 100).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -655,6 +660,7 @@ impl UiInput {
         if !valid_name(&self.id)
             || !valid_text(&self.label)
             || self.placeholder.as_deref().is_some_and(|p| !valid_text(p))
+            || self.help.as_deref().is_some_and(|h| !valid_text(h))
             || self.default_path.as_deref().is_some_and(|p| !valid_path(p))
             || self
                 .max_path
@@ -881,6 +887,7 @@ impl UiInput {
             .placeholder
             .as_deref()
             .map(|p| translate(translation, p));
+        input.help = self.help.as_deref().map(|h| translate(translation, h));
         for choice in &mut input.choices {
             choice.label = translate(translation, &choice.label);
         }

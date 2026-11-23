@@ -74,6 +74,10 @@ pub struct PluginAdmin {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(max = MAX_ADMIN_ITEMS))]
     pub pages: Vec<AdminPage>,
+    /// Optional reviewed Vue presentation for each staff page. The page still defines its
+    /// navigation, permission, data and actions when the bundle is unavailable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub page_bundles: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<AdminSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -331,6 +331,7 @@ fn placeholder(raw: &Map<String, Value>, kind: UiContributionKind) -> Option<UiC
             blocks: Vec::new(),
             inputs: Vec::new(),
             translations,
+            errors: BTreeMap::new(),
         },
         required_permissions,
         icon: raw
@@ -352,6 +353,7 @@ fn placeholder(raw: &Map<String, Value>, kind: UiContributionKind) -> Option<UiC
         summary: None,
         availability: None,
         source: None,
+        tabs: Vec::new(),
         scan: None,
         preview: None,
         variants: Vec::new(),

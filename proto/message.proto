@@ -130,11 +130,20 @@ message Message {
   optional string thread_id = 15;  // 话题/线程根消息 ID；普通消息为空，话题回复必须使用本 typed field，不得写入 attributes
   MessageContent content = 20;  // 强类型消息体（与 message_type 一致）
   MessageStatus status = 30;  // 消息状态（含已撤回等，见 MessageStatus）
+  uint64 last_edit_seq = 31; // 服务端生成：当前正文最后一次编辑的会话序列，发送入口忽略客户端提供值
+  repeated MessageReactionState reaction_states = 32; // 服务端权威的逐用户/表情版本，含已移除状态
   MessageRetentionPolicy retention_policy = 40;  // 保留/过期策略
   MessageRetentionState retention_state = 41;  // 保留/过期生命周期
   optional OfflinePushInfo offline_push_info = 61;  // 离线推送展示（可选）
   map<string, string> attributes = 23;  // 非稳定扩展键值；核心语义必须使用 typed fields
   map<string, bytes> extensions = 1000;  // 业务扩展（key 建议命名空间，如 biz.xxx）
+}
+
+message MessageReactionState {
+  string user_id = 1;
+  string emoji = 2;
+  uint64 event_seq = 3;
+  bool active = 4;
 }
 
 // 下行

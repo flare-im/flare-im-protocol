@@ -163,6 +163,31 @@
       ],
       "type": "object"
     },
+    "LinksSection": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "familySuffix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "primary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "primary"
+      ],
+      "type": "object"
+    },
     "PathService": {
       "properties": {
         "path": {
@@ -195,6 +220,13 @@
     },
     "PortService": {
       "properties": {
+        "host": {
+          "description": "Direct UDP hostname when HTTPS and WebSocket use a different ingress.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "port": {
           "format": "uint16",
           "maximum": 65535,
@@ -339,6 +371,16 @@
       "description": "RFC 3339。",
       "format": "date-time",
       "type": "string"
+    },
+    "links": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LinksSection"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "placement": {
       "$ref": "#/$defs/Placement"

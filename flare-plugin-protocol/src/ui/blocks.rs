@@ -114,6 +114,8 @@ pub const MIN_UI_STEPS: usize = 2;
 pub const MAX_UI_STEPS: usize = 6;
 /// Banner blocks of one document.
 pub const MAX_UI_BANNERS: usize = 2;
+/// Result blocks of one document.
+pub const MAX_UI_RESULTS: usize = 1;
 /// Items resolved by a timeline block.
 pub const MAX_UI_TIMELINE_ITEMS: usize = 50;
 
@@ -148,6 +150,7 @@ pub enum UiBlock {
     Steps(UiStepsBlock),
     Banner(UiBannerBlock),
     Timeline(UiTimelineBlock),
+    Result(UiResultBlock),
 }
 kind_tagged! {
     UiBlock = "UiBlock" {
@@ -172,6 +175,7 @@ kind_tagged! {
         "steps" => Steps(UiStepsBlock),
         "banner" => Banner(UiBannerBlock),
         "timeline" => Timeline(UiTimelineBlock),
+        "result" => Result(UiResultBlock),
     }
 }
 
@@ -471,6 +475,73 @@ pub struct UiStatusValue {
     pub tone: UiTone,
 }
 
+/// A field's or a column's label for one enumerated value: words
+/// (`"已完成"`, drawn as text) or words with a tone
+/// (`{"label": "已完成", "tone": "success"}`, drawn as a tag). Both
+/// translate like the plain form.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum UiValueLabel {
+    Text(String),
+    Toned(UiStatusValue),
+}
+impl UiValueLabel {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Text(label) => label,
+            Self::Toned(value) => &value.label,
+        }
+    }
+    /// The declared tone; none for the plain form.
+    pub fn tone(&self) -> Option<UiTone> {
+        match self {
+            Self::Text(_) => None,
+            Self::Toned(value) => Some(value.tone),
+        }
+    }
+    pub(crate) fn is_valid(&self) -> bool {
+        valid_text(self.label())
+    }
+}
+impl From<&str> for UiValueLabel {
+    fn from(label: &str) -> Self {
+        Self::Text(label.to_owned())
+    }
+}
+impl From<String> for UiValueLabel {
+    fn from(label: String) -> Self {
+        Self::Text(label)
+    }
+}
+
+/// The outcome of a flow (a payment, a submission): the state at
+/// `statePath` mapped to a title and a tone (`1..=32` values), with an
+/// optional amount and description. At most one per document; kits draw it
+/// as the result layout (docs/plugin-experience.md R7). An unmapped state
+/// resolves `unmapped`, neutral.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiResultBlock {
+    pub state_path: String,
+    /// Keys `1..=64` bytes; labels translated through `texts`.
+    pub values: BTreeMap<String, UiStatusValue>,
+    /// An amount shown large under the title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount_path: Option<String>,
+    /// How the amount reads, as for a field; its paths read the data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<UiFieldFormat>,
+    /// A scalar in the data shown as the explanation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_path: Option<String>,
+    /// Not shown when any condition (`0..=4`) matches the resolved data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_when: Vec<UiCondition>,
+    /// See [`UiBlock::is_required`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
 /// Done out of total (non-negative integers), with the percentage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -552,9 +623,10 @@ pub struct UiColumn {
     pub label: String,
     /// Inside a row.
     pub path: String,
-    /// Labels for enumerated cell values (`0..=32`), translated through `texts`.
+    /// Labels for enumerated cell values (`0..=32`), words or words with a
+    /// tone ([`UiValueLabel`]), translated through `texts`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub values: BTreeMap<String, String>,
+    pub values: BTreeMap<String, UiValueLabel>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub format: UiColumnFormat,
     /// How the value reads, as for a field; its paths read the row. Takes the
@@ -622,6 +694,14 @@ pub struct UiRowsBlock {
     /// `time` column.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub group_by_day: bool,
+    /// A kit icon name ([`crate::manifest::is_ui_icon_name`]) leading every
+    /// row of a page list in a 36 circle, which makes each row a record laid
+    /// out like a ledger line (docs/plugin-experience.md R2.3, 5.8): the
+    /// first column is its value at the end, with the toned columns as tags
+    /// under it; the second titles it and the others make the line under the
+    /// title. A name a kit does not know draws no icon. Presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Not shown when any condition matches (`0..=4`). Unlike the row
     /// actions' conditions these read the page (the source result), not a row.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1007,6 +1087,7 @@ pub enum ResolvedUiBlock {
     Steps(ResolvedUiSteps),
     Banner(ResolvedUiBanner),
     Timeline(ResolvedUiTimeline),
+    Result(ResolvedUiResult),
 }
 kind_tagged! {
     ResolvedUiBlock = "ResolvedUiBlock" {
@@ -1031,6 +1112,7 @@ kind_tagged! {
         "steps" => Steps(ResolvedUiSteps),
         "banner" => Banner(ResolvedUiBanner),
         "timeline" => Timeline(ResolvedUiTimeline),
+        "result" => Result(ResolvedUiResult),
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1180,6 +1262,25 @@ pub struct ResolvedUiTimeline {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty_text: Option<String>,
 }
+/// A resolved result block ([`UiResultBlock`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiResult {
+    /// The raw state (`pending` makes kits re-read the page for a while).
+    pub state: String,
+    /// The state's label, translated; the raw state when `unmapped`.
+    pub title: String,
+    pub tone: UiTone,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmapped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    /// What the block's `format` adds to `amount`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<ResolvedUiFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedUiTimelineItem {
@@ -1282,6 +1383,10 @@ pub struct ResolvedUiEntry {
 pub struct ResolvedUiBadge {
     pub text: String,
     pub tone: UiTone,
+    /// The value is not among the declared labels: `text` is the raw value,
+    /// which a kit does not show as such.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmapped: bool,
 }
 /// The header of a group of entries ("Option A · 5 votes · 42%").
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1350,6 +1455,10 @@ pub struct ResolvedUiStatus {
     pub label: Option<String>,
     pub text: String,
     pub tone: UiTone,
+    /// The block maps its values and this one is not among them: `text` is
+    /// the raw value, which a kit does not show as such.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmapped: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1406,6 +1515,9 @@ pub struct ResolvedUiRows {
     /// ([`UiRowsBlock::group_by_day`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub group_by_day: bool,
+    /// The record icon ([`UiRowsBlock::icon`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1465,6 +1577,14 @@ pub struct ResolvedUiCell {
     /// What the column's `valueFormat` adds to `text`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<ResolvedUiFormat>,
+    /// The tone of the value's label when it declares one; neutral when
+    /// `unmapped`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<UiTone>,
+    /// The column's values form an enumeration (a toned label) and this one
+    /// is not among them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmapped: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1490,11 +1610,17 @@ fn optional_path(path: &Option<String>) -> bool {
 fn optional_text(text: &Option<String>) -> bool {
     text.as_deref().is_none_or(valid_text)
 }
-fn valid_value_labels(values: &BTreeMap<String, String>) -> bool {
+fn valid_value_labels(values: &BTreeMap<String, UiValueLabel>) -> bool {
     values.len() <= MAX_UI_VALUE_LABELS
         && values
             .iter()
-            .all(|(value, label)| !value.is_empty() && value.len() <= 64 && valid_text(label))
+            .all(|(value, label)| !value.is_empty() && value.len() <= 64 && label.is_valid())
+}
+fn valid_status_values(values: &BTreeMap<String, UiStatusValue>) -> bool {
+    values.len() <= MAX_UI_VALUE_LABELS
+        && values.iter().all(|(value, mapped)| {
+            !value.is_empty() && value.len() <= 64 && valid_text(&mapped.label)
+        })
 }
 fn valid_item_labels(labels: &Option<UiValueLabels>) -> bool {
     labels.as_ref().is_none_or(|labels| {
@@ -1514,10 +1640,12 @@ fn operation_action<'a>(actions: &'a [UiAction], id: &str) -> Option<&'a UiActio
 /// An action a rows block may own: an operation, or a page the row opens with
 /// the row's bound input as its arguments. Never a native capability. On an
 /// admin page (`admin.pages`) the page is another admin page of the plugin and
-/// the bound input its filters.
+/// the bound input its filters. Never one with `disabledWhen`: a resolved row
+/// carries no disabled state.
 fn row_action<'a>(actions: &'a [UiAction], id: &str) -> Option<&'a UiAction> {
     actions.iter().find(|a| {
         a.id == id
+            && a.disabled_when.is_empty()
             && matches!(
                 a.target,
                 UiActionTarget::Operation { .. } | UiActionTarget::Page { .. }
@@ -1576,6 +1704,7 @@ impl UiBlock {
             Self::Steps(b) => &b.hidden_when,
             Self::Banner(b) => &b.hidden_when,
             Self::Timeline(b) => &b.hidden_when,
+            Self::Result(b) => &b.hidden_when,
         }
     }
 
@@ -1607,6 +1736,7 @@ impl UiBlock {
             Self::Steps(b) => b.required,
             Self::Banner(b) => b.required,
             Self::Timeline(b) => b.required,
+            Self::Result(b) => b.required,
         }
     }
 
@@ -1634,6 +1764,7 @@ impl UiBlock {
             Self::Steps(_) => "steps",
             Self::Banner(_) => "banner",
             Self::Timeline(_) => "timeline",
+            Self::Result(_) => "result",
         }
     }
 
@@ -1664,6 +1795,7 @@ impl UiBlock {
             Self::Stats(b) => b.items.iter().filter_map(|i| i.format.as_ref()).collect(),
             Self::Chart(b) => b.format.iter().collect(),
             Self::Hero(b) => b.format.iter().collect(),
+            Self::Result(b) => b.format.iter().collect(),
             _ => Vec::new(),
         }
     }
@@ -1822,6 +1954,9 @@ impl UiBlock {
                             })
                     })
                     && valid_item_labels(&b.value_labels)
+                    && b.icon
+                        .as_deref()
+                        .is_none_or(crate::manifest::is_ui_icon_name)
             }
             Self::ProtectedMedia(b) => {
                 optional_text(&b.label)
@@ -1928,6 +2063,15 @@ impl UiBlock {
                     })
                     && optional_text(&b.empty_text)
             }
+            Self::Result(b) => {
+                valid_path(&b.state_path)
+                    && !b.values.is_empty()
+                    && valid_status_values(&b.values)
+                    && optional_path(&b.amount_path)
+                    && optional_path(&b.description_path)
+                    && b.format.as_ref().is_none_or(UiFieldFormat::is_valid)
+                    && (b.format.is_none() || b.amount_path.is_some())
+            }
         };
         if ok && valid_conditions(self.hidden_when()) {
             Ok(())
@@ -2029,16 +2173,27 @@ fn badge(
 ) -> Option<ResolvedUiBadge> {
     let labels = labels.as_ref()?;
     let raw = non_blank(item.pointer(&labels.path))?;
-    Some(match labels.values.get(&raw) {
+    Some(mapped_badge(&labels.values, raw, translation))
+}
+/// `raw` through declared status labels: the translated label and its tone,
+/// or the raw value, neutral, `unmapped` when labels are declared.
+fn mapped_badge(
+    values: &BTreeMap<String, UiStatusValue>,
+    raw: String,
+    translation: Option<&UiTranslation>,
+) -> ResolvedUiBadge {
+    match values.get(&raw) {
         Some(mapped) => ResolvedUiBadge {
             text: translate(translation, &mapped.label),
             tone: mapped.tone,
+            unmapped: false,
         },
         None => ResolvedUiBadge {
+            unmapped: !values.is_empty(),
             text: raw,
             tone: UiTone::Neutral,
         },
-    })
+    }
 }
 fn visible(action: &UiAction, data: &Value, viewer: &str) -> bool {
     !action.hidden_when.iter().any(|c| c.matches(data, viewer))
@@ -2069,7 +2224,7 @@ impl UiBlock {
                         field
                             .values
                             .get(raw)
-                            .map(|mapped| translate(scope.translation, mapped))
+                            .map(|mapped| translate(scope.translation, mapped.label()))
                     },
                 );
                 if fields.is_empty() {
@@ -2110,14 +2265,12 @@ impl UiBlock {
             }
             Self::Status(b) => {
                 let raw = non_blank(scope.data.pointer(&b.path))?;
-                let (text, tone) = match b.values.get(&raw) {
-                    Some(mapped) => (translate(scope.translation, &mapped.label), mapped.tone),
-                    None => (raw, UiTone::Neutral),
-                };
+                let mapped = mapped_badge(&b.values, raw, scope.translation);
                 ResolvedUiBlock::Status(ResolvedUiStatus {
                     label: label(scope, &b.label),
-                    text,
-                    tone,
+                    text: mapped.text,
+                    tone: mapped.tone,
+                    unmapped: mapped.unmapped,
                 })
             }
             Self::Progress(b) => {
@@ -2226,7 +2379,9 @@ impl UiBlock {
                         .iter()
                         .filter_map(|id| any_action(scope.actions, id))
                         .filter(|action| visible(action, scope.data, scope.viewer))
-                        .map(|action| resolve_action(action, scope.translation))
+                        .map(|action| {
+                            resolve_action(action, scope.translation, scope.data, scope.viewer)
+                        })
                         .collect(),
                 })
             }
@@ -2264,7 +2419,9 @@ impl UiBlock {
                     .as_deref()
                     .and_then(|id| any_action(scope.actions, id))
                     .filter(|action| visible(action, scope.data, scope.viewer))
-                    .map(|action| resolve_action(action, scope.translation)),
+                    .map(|action| {
+                        resolve_action(action, scope.translation, scope.data, scope.viewer)
+                    }),
             }),
             Self::Timeline(b) => {
                 let raw = scope.data.pointer(&b.items_path)?.as_array()?;
@@ -2276,24 +2433,34 @@ impl UiBlock {
                             at_ms: item.pointer(&b.time_path).and_then(as_instant)?,
                             title: non_blank(item.pointer(&b.title_path))?,
                             detail: non_blank(at(item, &b.detail_path)),
-                            status: non_blank(at(item, &b.status_path)).map(|raw| {
-                                match b.values.get(&raw) {
-                                    Some(mapped) => ResolvedUiBadge {
-                                        text: translate(scope.translation, &mapped.label),
-                                        tone: mapped.tone,
-                                    },
-                                    None => ResolvedUiBadge {
-                                        text: raw,
-                                        tone: UiTone::Neutral,
-                                    },
-                                }
-                            }),
+                            status: non_blank(at(item, &b.status_path))
+                                .map(|raw| mapped_badge(&b.values, raw, scope.translation)),
                         })
                     })
                     .collect();
                 ResolvedUiBlock::Timeline(ResolvedUiTimeline {
                     items,
                     empty_text: label(scope, &b.empty_text),
+                })
+            }
+            Self::Result(b) => {
+                let state = non_blank(scope.data.pointer(&b.state_path))?;
+                let mapped = mapped_badge(&b.values, state.clone(), scope.translation);
+                let (amount, format) = match non_blank(at(scope.data, &b.amount_path)) {
+                    Some(raw) => {
+                        let (text, format) = formatted(&b.format, scope, scope.data, &raw);
+                        (Some(text.unwrap_or(raw)), format)
+                    }
+                    None => (None, None),
+                };
+                ResolvedUiBlock::Result(ResolvedUiResult {
+                    state,
+                    title: mapped.text,
+                    tone: mapped.tone,
+                    unmapped: mapped.unmapped,
+                    amount,
+                    format,
+                    description: non_blank(at(scope.data, &b.description_path)),
                 })
             }
         })
@@ -2483,7 +2650,7 @@ impl UiChoicesBlock {
             .filter(|_| !closed)
             .and_then(|id| operation_action(scope.actions, id))
             .filter(|action| visible(action, scope.data, scope.viewer))
-            .map(|action| resolve_action(action, scope.translation));
+            .map(|action| resolve_action(action, scope.translation, scope.data, scope.viewer));
         Some(ResolvedUiChoices {
             options,
             multiple: self.multiple(scope.data),
@@ -2669,6 +2836,8 @@ impl UiRowsBlock {
                                 text: text.unwrap_or(raw),
                                 time_ms: None,
                                 format,
+                                tone: None,
+                                unmapped: false,
                             };
                         }
                         match column.format {
@@ -2676,15 +2845,29 @@ impl UiRowsBlock {
                                 time_ms: value.and_then(as_instant),
                                 text: raw,
                                 format: None,
+                                tone: None,
+                                unmapped: false,
                             },
-                            UiColumnFormat::Text => ResolvedUiCell {
-                                text: column
-                                    .values
-                                    .get(&raw)
-                                    .map_or(raw, |mapped| translate(scope.translation, mapped)),
-                                time_ms: None,
-                                format: None,
-                            },
+                            UiColumnFormat::Text => {
+                                let mapped = column.values.get(&raw);
+                                // A blank cell is no value, not an unknown one.
+                                let unmapped = mapped.is_none()
+                                    && !raw.is_empty()
+                                    && super::enumerated(&column.values);
+                                ResolvedUiCell {
+                                    tone: if unmapped {
+                                        Some(UiTone::Neutral)
+                                    } else {
+                                        mapped.and_then(UiValueLabel::tone)
+                                    },
+                                    unmapped,
+                                    text: mapped.map_or(raw, |mapped| {
+                                        translate(scope.translation, mapped.label())
+                                    }),
+                                    time_ms: None,
+                                    format: None,
+                                }
+                            }
                         }
                     })
                     .collect();
@@ -2728,12 +2911,13 @@ impl UiRowsBlock {
             next_cursor: non_blank(at(scope.data, &self.cursor_path)),
             actions: row_actions
                 .into_iter()
-                .map(|action| resolve_action(action, scope.translation))
+                .map(|action| resolve_action(action, scope.translation, scope.data, scope.viewer))
                 .collect(),
             empty_text: label(scope, &self.empty_text),
             filters: self.filters.clone(),
             presentation: self.presentation,
             group_by_day: self.group_by_day,
+            icon: self.icon.clone(),
         })
     }
 }
@@ -2761,7 +2945,12 @@ impl UiProtectedMediaBlock {
         Some(ResolvedUiProtectedMedia {
             label: label(scope, &self.label),
             items,
-            action: Some(resolve_action(action, scope.translation)),
+            action: Some(resolve_action(
+                action,
+                scope.translation,
+                scope.data,
+                scope.viewer,
+            )),
             input_name: self.input_name.clone(),
             reason_input: self.reason_input.clone(),
             url_path: self.url_path.clone(),

@@ -26,6 +26,7 @@ const VIEW_FIELDS: &[&str] = &[
     "nextCursor",
     "refreshMs",
     "minBuild",
+    "tabs",
 ];
 
 /// A view as a host passed it back ([`ResolvedPluginView`] in its JSON form).

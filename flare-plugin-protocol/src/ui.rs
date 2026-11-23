@@ -34,6 +34,12 @@
 //! `qr`, `hero`, `steps`, `banner` and `timeline`; the inputs `money`,
 //! `image` and `document`; the formats `percent`, `duration`, `count` and
 //! `bytes`; native capability parameters ([`NativeParams`]) and `into`.
+//!
+//! The plugin experience round adds, equally optional: field and column
+//! values with a tone ([`UiValueLabel`]), action `group` ([`UiActionGroup`])
+//! and `icon`, the `result` block ([`UiResultBlock`]), and `unmapped` on
+//! resolved fields, cells, statuses and badges whose value the plugin did
+//! not label.
 mod blocks;
 mod descriptor;
 mod formats;
@@ -104,6 +110,25 @@ pub struct UiDocument {
     pub inputs: Vec<UiInput>,
     #[serde(default)]
     pub translations: BTreeMap<String, UiTranslation>,
+    /// What a refusal of one of this document's actions means to the
+    /// viewer, by the plugin's refusal code (`[A-Z][A-Z0-9_]*`, at most 64
+    /// bytes; at most [`MAX_UI_ERROR_TEXTS`] codes), translated through
+    /// `texts` ([`Self::refusal_text`]). The engine hands the host these
+    /// words with a refusal of that code; without them the host says its
+    /// own generic line (docs/plugin-experience.md R8).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub errors: BTreeMap<String, String>,
+}
+/// Refusal codes one document words ([`UiDocument::errors`]).
+pub const MAX_UI_ERROR_TEXTS: usize = 32;
+/// A plugin's refusal code as hosts and documents name it: an upper-case
+/// letter, then upper-case letters, digits or `_`, at most 64 bytes.
+pub fn is_refusal_code(code: &str) -> bool {
+    code.len() <= 64
+        && code.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -427,9 +452,11 @@ impl UiEntryAvailability {
 pub struct UiField {
     pub label: String,
     pub path: String,
-    /// Display labels for enumerated values (a status shown as words, not as its wire value).
+    /// Display labels for enumerated values (a status shown as words, not as
+    /// its wire value): words, or words with a tone ([`UiValueLabel`]). In a
+    /// map with a toned label a value outside it resolves `unmapped`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub values: BTreeMap<String, String>,
+    pub values: BTreeMap<String, UiValueLabel>,
     /// How the value reads. The resolved field keeps its plain text either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<UiFieldFormat>,
@@ -439,6 +466,14 @@ pub struct UiField {
 pub enum UiActionStyle {
     Primary,
     Danger,
+}
+/// The list group a page draws a destination action in: `common` (everyday
+/// destinations) or `records` (records and settings). Presentation only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiActionGroup {
+    Common,
+    Records,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -459,6 +494,17 @@ pub struct UiAction {
     /// plugin still authorizes every invocation; hiding is never a permission.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_when: Vec<UiCondition>,
+    /// Presentation only: the action is drawn disabled, with `disabledReason`
+    /// under it (docs/plugin-experience.md R2.5), when any condition matches
+    /// (`0..=4`, read like `hiddenWhen`, which goes first). Disabling is never
+    /// a permission either. Not on an action a rows block owns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_when: Vec<UiCondition>,
+    /// Why the action is unavailable (translated through `texts`): required
+    /// with `disabledWhen` and only with it. A resolved action carries it only
+    /// while a condition matches; kits read its presence as disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
     /// Ids of document inputs the host collects first (at most
     /// [`MAX_UI_INPUTS`], operation or transient reauthenticate targets);
     /// their validated values join the action input under their ids, which
@@ -470,6 +516,15 @@ pub struct UiAction {
     pub confirm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<UiActionStyle>,
+    /// Presentation only: the page list group the action is drawn in
+    /// (docs/plugin-experience.md R2.1). Absent: one ungrouped list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<UiActionGroup>,
+    /// Presentation only: a kit icon name drawn beside the action's label
+    /// ([`crate::manifest::is_ui_icon_name`]); a name a kit does not know
+    /// draws no icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Where the host shows the action: the button row (default) or the
     /// card's overflow menu (⋯). A resolved view lists them apart
     /// ([`ResolvedPluginView::actions`], [`ResolvedPluginView::menu_actions`]);
@@ -518,6 +573,15 @@ pub struct UiPageTransition {
     pub input: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<UiCondition>,
+    /// An action of the opened page the host runs once that page has loaded
+    /// for this navigation, as if the viewer chose it (the next step of what
+    /// they just did, such as paying for what they sent): only when the
+    /// resolved page lists it as a shown, enabled operation without a form
+    /// or confirmation, and never on a refresh, a return or a later open. It
+    /// asks for no consent of its own, so a payment still waits for the
+    /// host's confirmation. Not with `actionId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
 }
 impl UiPageTransition {
     pub fn resolve(&self, data: &Value) -> Result<Option<Value>> {
@@ -529,12 +593,22 @@ impl UiPageTransition {
         if let Some(id) = &self.plugin_id {
             target["pluginId"] = Value::from(id.clone());
         }
-        Ok(Some(
-            serde_json::json!({"kind":"host","target":target,"payload":bind_inputs(&self.input,data)?}),
-        ))
+        let mut next = serde_json::json!({"kind":"host","target":target,"payload":bind_inputs(&self.input,data)?});
+        if let Some(run) = &self.run {
+            next["run"] = Value::from(run.clone());
+        }
+        Ok(Some(next))
     }
     pub fn validate(&self) -> Result<()> {
         if self.action_id.as_deref().is_some_and(|id| !valid_name(id))
+            || self.run.as_deref().is_some_and(|id| {
+                self.action_id.is_some()
+                    || id.is_empty()
+                    || id.len() > 64
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            })
             || self.page.is_empty()
             || self.page.len() > 160
             || !valid_bindings(&self.input)
@@ -689,7 +763,7 @@ pub(crate) fn valid_field(field: &UiField) -> bool {
         && field
             .values
             .iter()
-            .all(|(value, label)| !value.is_empty() && value.len() <= 64 && valid_text(label))
+            .all(|(value, label)| !value.is_empty() && value.len() <= 64 && label.is_valid())
         && field.format.as_ref().is_none_or(UiFieldFormat::is_valid)
 }
 fn valid_bindings(input: &BTreeMap<String, String>) -> bool {
@@ -729,7 +803,7 @@ pub(crate) fn translate(translation: Option<&UiTranslation>, source: &str) -> St
         .map_or(source, String::as_str)
         .to_owned()
 }
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum UiActionTarget {
     Operation {
@@ -981,6 +1055,35 @@ pub struct PaymentConfirmationOrder {
     pub title: String,
     pub expires_at_ms: i64,
     pub operation: String,
+    /// What the payer's balance lacks for this order, as the service that
+    /// built it read the balance then (a decimal like `amount`, above zero).
+    /// Hosts hold confirm and say so (docs/plugin-experience.md 4.3); the
+    /// payment provider still decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortfall: Option<String>,
+    /// The page the host's "Top up" key opens (a `page` target, of another
+    /// plugin when it names one): where the payer adds funds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_up: Option<UiActionTarget>,
+    /// The plugin whose business the payment is for, when it is not the one
+    /// asking for it (a red packet paid through the wallet's order): hosts
+    /// say "requested by" it when they know its name, else by the plugin
+    /// that asked. A plugin id; presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
+}
+/// A plugin id as a payment order names one ([`PaymentConfirmationOrder::requested_by`]):
+/// dot-separated parts of lower-case letters, digits, `-` or `_`, each
+/// starting with a letter, at most 128 bytes.
+fn valid_plugin_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id.split('.').all(|part| {
+            part.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        })
 }
 impl PaymentConfirmationOrder {
     /// The order in a successful result `data` of a plugin of
@@ -1006,6 +1109,19 @@ impl PaymentConfirmationOrder {
             || self.expires_at_ms <= 0
             || self.operation.is_empty()
             || self.operation.len() > 128
+            || self.shortfall.as_deref().is_some_and(|s| {
+                !is_ui_decimal(s, MAX_UI_MONEY_INPUT_SCALE)
+                    || cmp_ui_decimal(s, "0") != std::cmp::Ordering::Greater
+            })
+            || self.top_up.as_ref().is_some_and(|target| {
+                !matches!(target, UiActionTarget::Page { page, plugin_id }
+                    if !page.is_empty() && page.len() <= 160
+                        && plugin_id.as_ref().is_none_or(|p| !p.is_empty() && p.len() <= 128))
+            })
+            || self
+                .requested_by
+                .as_deref()
+                .is_some_and(|id| !valid_plugin_id(id))
         {
             return Err(ProtocolError::Denied("invalid payment confirmation order"));
         }
@@ -1159,6 +1275,29 @@ impl UiDetail {
     }
 }
 
+/// Fewest and most tabs of a page ([`crate::manifest::UiContribution::tabs`]).
+pub const MIN_UI_PAGE_TABS: usize = 2;
+pub const MAX_UI_PAGE_TABS: usize = 4;
+/// One tab of a page: a sibling `page` contribution of the same plugin and
+/// its label (translated through `texts`). Kits draw a page's tabs as a
+/// segmented control under its header; choosing one replaces the shown page
+/// with that page (no new back step), opened with the same arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiPageTab {
+    pub page: String,
+    pub label: String,
+}
+/// A page's tab as kits get it: the label translated, `selected` on the
+/// tab naming the page resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedUiPageTab {
+    pub page: String,
+    pub label: String,
+    pub selected: bool,
+}
+
 /// The data a `page` contribution is resolved against: the result `data` of
 /// a declared `query` operation. A page is opened with arguments, the input
 /// the opening action bound (a page target's payload; `{}` from an account
@@ -1261,6 +1400,13 @@ impl UiDocument {
     pub fn localized_title(&self, locale: &str) -> &str {
         translation_for(&self.translations, locale).map_or(&self.title, |t| &t.title)
     }
+    /// The words this document gives a refusal of `code` ([`Self::errors`]),
+    /// in `locale` through the translation's `texts` (same language fallback
+    /// as resolved views), else as declared; `None` when it gives none.
+    pub fn refusal_text(&self, code: &str, locale: &str) -> Option<String> {
+        let text = self.errors.get(code)?;
+        Some(translate(translation_for(&self.translations, locale), text))
+    }
     /// Validate as a client surface ([`UiDocumentLimits::CLIENT`]).
     pub fn validate(&self) -> Result<()> {
         self.validate_within(UiDocumentLimits::CLIENT)
@@ -1328,6 +1474,14 @@ impl UiDocument {
         {
             return Err(ProtocolError::Denied("invalid UI translation"));
         }
+        if self.errors.len() > MAX_UI_ERROR_TEXTS
+            || self
+                .errors
+                .iter()
+                .any(|(code, text)| !is_refusal_code(code) || !valid_text(text))
+        {
+            return Err(ProtocolError::Denied("invalid UI error texts"));
+        }
         if !self.fields.iter().all(valid_field) {
             return Err(ProtocolError::Denied("invalid UI field"));
         }
@@ -1354,7 +1508,15 @@ impl UiDocument {
             if !valid_bindings(&action.input) || !action.values.is_empty() {
                 return Err(ProtocolError::Denied("invalid UI action bindings"));
             }
-            if action.hidden_when.len() > 4 || !action.hidden_when.iter().all(UiCondition::is_valid)
+            if action.hidden_when.len() > 4
+                || !action.hidden_when.iter().all(UiCondition::is_valid)
+                || action.disabled_when.len() > 4
+                || !action.disabled_when.iter().all(UiCondition::is_valid)
+                || action.disabled_when.is_empty() != action.disabled_reason.is_none()
+                || action
+                    .disabled_reason
+                    .as_deref()
+                    .is_some_and(|r| !valid_text(r))
             {
                 return Err(ProtocolError::Denied("invalid UI action condition"));
             }
@@ -1405,6 +1567,10 @@ impl UiDocument {
                         || !matches!(action.target, UiActionTarget::Operation { .. })
                 })
                 || action.confirm.as_deref().is_some_and(|c| !valid_text(c))
+                || action
+                    .icon
+                    .as_deref()
+                    .is_some_and(|icon| !crate::manifest::is_ui_icon_name(icon))
                 || !self.valid_native_target(&action.target)
                 || action.id.is_empty()
                 || action.id.len() > 64
@@ -1424,16 +1590,21 @@ impl UiDocument {
                 return Err(ProtocolError::Denied("invalid UI block"));
             }
         }
-        let (mut images, mut heroes, mut banners) = (0, 0, 0);
+        let (mut images, mut heroes, mut banners, mut results) = (0, 0, 0, 0);
         for block in self.all_blocks() {
             match block {
                 UiBlock::Image(_) => images += 1,
                 UiBlock::Hero(_) => heroes += 1,
                 UiBlock::Banner(_) => banners += 1,
+                UiBlock::Result(_) => results += 1,
                 _ => {}
             }
         }
-        if images > MAX_UI_IMAGES || heroes > MAX_UI_HEROES || banners > MAX_UI_BANNERS {
+        if images > MAX_UI_IMAGES
+            || heroes > MAX_UI_HEROES
+            || banners > MAX_UI_BANNERS
+            || results > MAX_UI_RESULTS
+        {
             return Err(ProtocolError::Denied("invalid UI block count"));
         }
         if self
@@ -2015,6 +2186,10 @@ pub struct ResolvedPluginView {
     /// the contribution, when the plugin names one ([`UiUpgrade::min_build`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_build: Option<u64>,
+    /// A page's tabs ([`crate::manifest::UiContribution::tabs`]), in order;
+    /// absent on a page without tabs and on every other view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<ResolvedUiPageTab>,
 }
 impl ResolvedPluginView {
     /// Append the next page of a paged detail, resolved against the same
@@ -2142,6 +2317,22 @@ pub struct ResolvedUiField {
     pub value: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<ResolvedUiFormat>,
+    /// The tone of the value's label when it declares one (`{label, tone}`
+    /// values); neutral when `unmapped`. Kits draw a toned value as a tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<UiTone>,
+    /// The field's values form an enumeration (a toned label) and this one
+    /// is not among them: `value` is the raw value, which a kit does not
+    /// show as such (docs/plugin-experience.md R3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmapped: bool,
+}
+/// Whether `values` name an enumeration: a map with a toned label
+/// ([`UiValueLabel::Toned`]). Only then is a value outside it `unmapped`; a
+/// map of plain words may label some values of free text and shows the rest
+/// as sent, as before.
+pub(crate) fn enumerated(values: &BTreeMap<String, UiValueLabel>) -> bool {
+    values.values().any(|label| label.tone().is_some())
 }
 /// Fields with a value, labels and values mapped by the given rules, then by
 /// the field's format. A field without a value is not shown: a card says what
@@ -2164,19 +2355,40 @@ pub(crate) fn resolve_fields(
             let (text, format) = field.format.as_ref().map_or((None, None), |format| {
                 format.resolve(data, &raw, translation)
             });
+            let unmapped = enumerated(&field.values) && !field.values.contains_key(&raw);
+            let tone = if unmapped {
+                Some(UiTone::Neutral)
+            } else {
+                field.values.get(&raw).and_then(UiValueLabel::tone)
+            };
             Some(ResolvedUiField {
                 label: label(field, index),
                 value: value(field, &raw).or(text).unwrap_or(raw),
                 format,
+                tone,
+                unmapped,
             })
         })
         .collect()
 }
-pub(crate) fn resolve_action(action: &UiAction, translation: Option<&UiTranslation>) -> UiAction {
+/// The action as kits get it, against `data` for `viewer`: conditions gone,
+/// texts translated, `disabledReason` only while a `disabledWhen` matches.
+pub(crate) fn resolve_action(
+    action: &UiAction,
+    translation: Option<&UiTranslation>,
+    data: &Value,
+    viewer: &str,
+) -> UiAction {
     let mut action = action.clone();
     action.hidden_when.clear();
     // Only `admin::AdminPage::resolve` binds them; a declaration never carries any.
     action.values.clear();
+    let disabled = action.disabled_when.iter().any(|c| c.matches(data, viewer));
+    action.disabled_when.clear();
+    action.disabled_reason = action
+        .disabled_reason
+        .filter(|_| disabled)
+        .map(|text| translate(translation, &text));
     if let Some(label) = translation.and_then(|t| t.actions.get(&action.id)) {
         action.label = label.clone();
     }
@@ -2205,8 +2417,9 @@ pub(crate) fn resolve_document(
             translation
                 .and_then(|t| t.values.get(&field.path))
                 .and_then(|labels| labels.get(raw))
-                .or_else(|| field.values.get(raw))
-                .cloned()
+                .map(String::as_str)
+                .or_else(|| field.values.get(raw).map(UiValueLabel::label))
+                .map(str::to_owned)
         },
     );
     let owned = document.owned_actions();
@@ -2220,7 +2433,7 @@ pub(crate) fn resolve_document(
                     .iter()
                     .any(|condition| condition.matches(data, viewer))
         })
-        .map(|action| resolve_action(action, translation))
+        .map(|action| resolve_action(action, translation, data, viewer))
         .partition(|action| action.placement == UiActionPlacement::Menu);
     let detail = detail.filter(|d| !d.is_hidden(data, viewer));
     let scope = blocks::Scope {
@@ -2288,6 +2501,7 @@ pub(crate) fn resolve_document(
         next_cursor: None,
         refresh_ms: None,
         min_build: None,
+        tabs: Vec::new(),
     }
 }
 impl UiContribution {
@@ -2327,6 +2541,16 @@ impl UiContribution {
         let mut view = resolve_document(&self.schema, data, locale, viewer, None);
         view.next_cursor = self.source.as_ref().and_then(|s| s.next_cursor(data));
         view.refresh_ms = self.source.as_ref().and_then(|s| s.refresh_ms);
+        let translation = translation_for(&self.schema.translations, locale);
+        view.tabs = self
+            .tabs
+            .iter()
+            .map(|tab| ResolvedUiPageTab {
+                page: tab.page.clone(),
+                label: translate(translation, &tab.label),
+                selected: tab.page == self.id,
+            })
+            .collect();
         Some(view)
     }
     /// [`UiDocument::retain_targets`] over the document and the detail; the
@@ -2404,6 +2628,7 @@ impl ResolvedPluginView {
             next_cursor: None,
             refresh_ms: None,
             min_build: None,
+            tabs: Vec::new(),
         }
     }
 }

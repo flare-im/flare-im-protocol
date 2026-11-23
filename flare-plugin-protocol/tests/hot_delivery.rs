@@ -58,6 +58,7 @@ fn the_engine_vocabulary_is_read_from_the_enums() {
         "steps",
         "banner",
         "timeline",
+        "result",
     ] {
         assert!(engine.blocks.contains(block), "{block}");
     }
